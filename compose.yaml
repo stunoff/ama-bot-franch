@@ -1,0 +1,69 @@
+name: ama-franchising
+x-app: &app
+  build: .
+  image: ama-franchising:local
+  environment:
+    DATABASE_URL: mysql+pymysql://ama:ama@mysql:3306/ama?charset=utf8mb4
+    FILE_ROOT: /data/files
+    TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+    TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+    MAX_TOKEN: ${MAX_TOKEN:-}
+    MAX_WEBHOOK_SECRET: ${MAX_WEBHOOK_SECRET:-}
+    MAX_API_URL: ${MAX_API_URL:-https://platform-api.max.ru}
+    PUBLIC_URL: ${PUBLIC_URL:-}
+    MAX_FILE_BYTES: ${MAX_FILE_BYTES:-20971520}
+    WORKER_INTERVAL: ${WORKER_INTERVAL:-2}
+  volumes:
+    - files:/data/files
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs: [/tmp]
+
+services:
+  mysql:
+    image: mysql:latest
+    ports:
+      - "33061:3306"
+    environment:
+      MYSQL_DATABASE: ama
+      MYSQL_USER: ama
+      MYSQL_PASSWORD: ama
+      MYSQL_ROOT_PASSWORD: ama
+      TZ: Europe/Moscow
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=ama mysql -h 127.0.0.1 -u ama ama -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      mysql: {condition: service_healthy}
+    restart: "no"
+  api:
+    <<: *app
+    ports: ["127.0.0.1:${APP_PORT:-8000}:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  worker:
+    <<: *app
+    command: ["python", "-m", "ama.worker"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+volumes:
+  mysql:
+  files:

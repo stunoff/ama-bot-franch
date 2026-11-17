@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ama-franchising"
+version = "0.1.0"
+description = "АМА Франчайзинг — Telegram/MAX, единое состояние MySQL"
+requires-python = ">=3.12"
+dependencies = ["fastapi==0.115.12", "uvicorn==0.34.2", "SQLAlchemy==2.0.40", "PyMySQL[rsa]==1.1.1", "alembic==1.15.2", "httpx==0.28.1", "pydantic-settings==2.9.1"]
+
+[project.optional-dependencies]
+test = ["pytest==8.3.5", "ruff==0.11.8"]
+
+[tool.setuptools.packages.find]
+include = ["ama*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120

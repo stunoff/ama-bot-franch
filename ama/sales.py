@@ -1,0 +1,182 @@
+from sqlalchemy import select, func
+from ama.auth import require
+from ama.errors import BusinessError, AccessDenied
+from ama.models import Lead, Interest, Deal, Payment, Binding, Entity, now
+from ama.service import stamp, versioned, record, parse_date
+
+STAGES = ["new", "qualification", "presentation", "financial_review", "contract"]
+
+
+def sales_role(db, actor, names):
+    binding = db.get(Binding, actor.binding_id)
+    allowed = {"consultant": {"sales"}, "contract": {"contracts"}, "curator": {"support"},
+               "support_head": {"support", "management"}, "chief_marketer": {"chief_marketer"}}
+    role = require(db, actor, names)
+    if binding.purpose not in allowed.get(role, set()):
+        raise AccessDenied("Действие доступно только в профильном рабочем чате.")
+    return role
+
+
+def lead_entry(db, person_id, source, consent_version, brand_id=None):
+    # Вызывается только после явного согласия, текст и версия которого опубликованы владельцем.
+    record(db, "consent", consent_version)
+    lead = db.scalar(select(Lead).where(Lead.person_id == person_id).with_for_update())
+    if not lead:
+        lead = Lead(person_id=person_id, source=source, consent_at=now(), consent_version=consent_version,
+                    last_reaction_at=now(), data={})
+        db.add(lead)
+        db.flush()
+        stamp(db, None, lead, "LEAD_CREATED")
+    else:
+        lead.last_reaction_at = now()
+        lead.version += 1
+    if brand_id:
+        brand = db.get(Entity, brand_id)
+        if not brand or brand.kind != "brand" or not brand.data.get("sales_available"):
+            raise BusinessError("Продажи бренда не активированы.")
+        if not db.scalar(select(Interest).where(Interest.lead_id == lead.id, Interest.brand_id == brand_id)):
+            db.add(Interest(lead_id=lead.id, brand_id=brand_id))
+    # no_contact не снимается при повторном входе.
+    return lead
+
+
+def update_lead(db, actor, lead_id, expected, action, data):
+    role = sales_role(db, actor, {"consultant"})
+    lead = db.scalar(select(Lead).where(Lead.id == lead_id).with_for_update())
+    if not lead:
+        raise BusinessError("Лид не найден.")
+    versioned(lead, expected)
+    if lead.owner_id and lead.owner_id != actor.person_id:
+        raise AccessDenied("Лид назначен другому консультанту.")
+    old = lead.version
+    if action == "take":
+        lead.owner_id = actor.person_id
+    elif not lead.owner_id:
+        raise BusinessError("Сначала возьмите лида в работу.")
+    elif action == "qualify":
+        allowed = {"name", "contact", "city", "brand_id", "budget", "start_period", "experience", "premises",
+                   "commercial_key", "commercial_version", "intent_confirmed", "requisites", "request_requisites", "exceptions"}
+        lead.data = {**lead.data, **{k: v for k, v in data.items() if k in allowed}}
+        lead.stage = "qualification"
+    elif action == "stage":
+        if data.get("stage") not in STAGES:
+            raise BusinessError("Неизвестный этап продажи.")
+        if data["stage"] == "contract":
+            raise BusinessError("Этап договора устанавливается подтверждённой передачей.")
+        lead.stage = data["stage"]
+    elif action in {"wait_lead", "not_now", "no_answer"}:
+        if not data.get("next_contact"):
+            raise BusinessError("Необходима дата следующего контакта.")
+        next_contact = parse_date(data["next_contact"])
+        if next_contact <= now():
+            raise BusinessError("Контакт должен быть назначен в будущем.")
+        lead.state = action
+        lead.data = {**lead.data, "next_contact": data["next_contact"], "next_action": data.get("next_action", "contact")}
+    elif action == "refuse":
+        if not data.get("reason"):
+            raise BusinessError("Укажите причину отказа.")
+        lead.result, lead.no_contact = "refused", True
+        lead.data = {**lead.data, "refusal_reason": data["reason"]}
+    elif action == "reopen":
+        if not data.get("consent_evidence"):
+            raise BusinessError("Необходимо подтверждение согласия на возобновление контакта.")
+        lead.no_contact, lead.result, lead.state = False, None, "active"
+    else:
+        raise BusinessError("Неизвестное действие продаж.")
+    lead.version += 1
+    stamp(db, actor, lead, f"SALES_{action.upper()}", old, data, role)
+    return lead
+
+
+def start_contract(db, actor, lead_id, expected, data):
+    role = sales_role(db, actor, {"consultant"})
+    lead = db.scalar(select(Lead).where(Lead.id == lead_id).with_for_update())
+    if not lead:
+        raise BusinessError("Лид не найден.")
+    versioned(lead, expected)
+    if lead.owner_id != actor.person_id:
+        raise AccessDenied("Передачу выполняет консультант лида.")
+    d = lead.data
+    missing = [k for k in ("name", "contact", "city", "brand_id", "commercial_key", "intent_confirmed") if not d.get(k)]
+    if missing or not (d.get("requisites") or d.get("request_requisites")):
+        raise BusinessError("Недостаточно данных для договора: " + ", ".join(missing + (["реквизиты или запрос реквизитов"] if not (d.get("requisites") or d.get("request_requisites")) else [])))
+    commercial = record(db, "commercial", d["commercial_key"])
+    if d.get("commercial_version") != commercial.version or commercial.data.get("brand_id") != d["brand_id"]:
+        raise BusinessError("Нужно подтвердить ознакомление с действующей коммерческой редакцией этого бренда.")
+    if not data.get("confirm"):
+        raise BusinessError("Требуется явное подтверждение передачи после предпросмотра.")
+    existing = db.scalar(select(Deal).where(Deal.lead_id == lead.id))
+    if existing:
+        return existing
+    amount = commercial.data.get("required_minor")
+    if not isinstance(amount, int) or amount < 0:
+        raise BusinessError("Не утверждена сумма/условие расчёта по сделке.")
+    deal = Deal(lead_id=lead.id, required_minor=amount, data={"commercial_id": commercial.id,
+                "commercial_version": commercial.version, "brand_id": d["brand_id"]})
+    db.add(deal)
+    db.flush()
+    lead.stage, lead.version = "contract", lead.version + 1
+    stamp(db, actor, deal, "CONTRACT_STARTED", data={"lead_id": lead.id}, role=role)
+    return deal
+
+
+def contract_action(db, actor, deal_id, expected, action, data, event_key):
+    role = sales_role(db, actor, {"contract"} if action != "curator_accept" else {"curator", "support_head"})
+    deal = db.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+    if not deal:
+        raise BusinessError("Сделка не найдена.")
+    versioned(deal, expected)
+    old = deal.version
+    if action == "package":
+        if deal.successful_at:
+            raise BusinessError("Новая редакция после успеха оформляется отдельным изменением.")
+        if not data.get("document_reference"):
+            raise BusinessError("Укажите ссылку на редакцию комплекта документов.")
+        deal.package_version += 1
+        deal.data = {**deal.data, "document_reference": data["document_reference"]}
+    elif action == "signed":
+        if not data.get("evidence"):
+            raise BusinessError("Нужно подтверждение подписей актуального комплекта.")
+        deal.signed_package_version = deal.package_version
+        deal.data = {**deal.data, "signature_evidence": data["evidence"]}
+    elif action == "payment":
+        if not isinstance(data.get("amount_minor"), int) or data["amount_minor"] <= 0 or not data.get("bank_reference"):
+            raise BusinessError("Нужны сумма в копейках и банковское подтверждение.")
+        source = data["bank_reference"]
+        if db.scalar(select(Payment).where(Payment.source_key == source)):
+            raise BusinessError("Банковская операция уже учтена.")
+        db.add(Payment(deal_id=deal.id, source_key=source, amount_minor=data["amount_minor"], confirmed_by=actor.person_id))
+        db.flush()
+    elif action == "confirm":
+        paid = db.scalar(select(func.coalesce(func.sum(Payment.amount_minor), 0)).where(Payment.deal_id == deal.id))
+        if deal.signed_package_version != deal.package_version or paid < deal.required_minor:
+            raise BusinessError("Не подтверждены подписи текущей редакции или условия расчётов.")
+        deal.successful_at = deal.successful_at or now()
+        lead = db.get(Lead, deal.lead_id)
+        lead.result = "success"
+    elif action == "assign_curator":
+        from ama.auth import active_person_role
+        from types import SimpleNamespace
+        scope = SimpleNamespace(partner_id=data.get("partner_id"), brand_id=deal.data.get("brand_id"), establishment_id=None)
+        if not deal.successful_at or not active_person_role(db, data.get("curator_id"), {"curator"}, scope):
+            raise BusinessError("Нужны успешная сделка и действующий куратор в выбранной области.")
+        deal.curator_id = data["curator_id"]
+        deal.data = {**deal.data, "partner_id": data.get("partner_id")}
+    elif action == "curator_accept":
+        if not deal.successful_at or actor.person_id != deal.curator_id:
+            raise AccessDenied("Передачу принимает назначенный куратор.")
+        deal.handoff_accepted_at = deal.handoff_accepted_at or now()
+    else:
+        raise BusinessError("Неизвестное договорное действие.")
+    deal.version += 1
+    stamp(db, actor, deal, f"DEAL_{action.upper()}", old, {"event_key": event_key}, role)
+    return deal
+
+
+def cohort_report(db, start, end):
+    cohort = list(db.scalars(select(Lead).where(Lead.created_at >= start, Lead.created_at < end)))
+    ids = [lead.id for lead in cohort]
+    won_cohort = db.scalar(select(func.count()).select_from(Deal).where(Deal.lead_id.in_(ids), Deal.successful_at.is_not(None)))
+    period_wins = db.scalar(select(func.count()).select_from(Deal).where(Deal.successful_at >= start, Deal.successful_at < end))
+    return {"cohort_leads": len(ids), "cohort_won": won_cohort, "period_wins": period_wins,
+            "cohort_conversion": won_cohort / len(ids) if ids else 0}

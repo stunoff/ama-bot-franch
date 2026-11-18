@@ -105,6 +105,8 @@ def outbox_step(transport):
         if row.binding_id and not row.payload.get("probe"):
             if not b or not b.active or not b.verified or row.binding_version != b.version:
                 row.status, row.error = "blocked", "Route changed; verify/migrate recipient"
+                from ama.sla import delivery_problem
+                delivery_problem(db,row)
                 return True
             if row.work_id:
                 w = db.get(Work, row.work_id)
@@ -112,6 +114,10 @@ def outbox_step(transport):
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
+            from ama.sla import deliverable
+            if not deliverable(db, row):
+                row.status, row.error = "cancelled", "SLA context changed before delivery"
+                return True
             if row.payload.get("public_record"):
                 from ama.models import Record
                 from ama.prospects import approved, brand
@@ -183,6 +189,8 @@ def outbox_step(transport):
             platform, chat_id, topic, payload = row.platform, row.chat_id, row.topic_key, row.payload
         except BusinessError as error:
             row.status, row.error = "blocked", str(error)
+            from ama.sla import delivery_problem
+            delivery_problem(db,row)
             return True
     # Лок на строке отпущен, но sending не подбирается другими воркерами.
     try:
@@ -217,8 +225,12 @@ def outbox_step(transport):
                 on_topic(db, row, external_id)
             except BusinessError as topic_error:
                 row.status, row.error = "uncertain", str(topic_error)
+        from ama.sla import delivery_problem
+        delivery_problem(db,row)
         if status == "sent":
             reminders.on_delivered(db, row)
+            from ama.sla import delivered
+            delivered(db, row)
         if status == "sent" and payload.get("probe"):
             b = db.get(Binding, row.binding_id)
             if b and b.version == row.binding_version:
@@ -234,6 +246,10 @@ def timer_step():
         if not t:
             return False
         w = db.get(Work, t.work_id)
+        from ama.sla import case_for
+        if w and case_for(db, w):
+            t.status = "cancelled"
+            return True
         if not w or w.status == "done" or w.version != t.data.get("version"):
             t.status = "cancelled"
             return True
@@ -273,13 +289,19 @@ def project_step():
         return tick(db)
 
 
+def sla_step():
+    from ama.sla import tick
+    with Session.begin() as db:
+        return tick(db)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     transport = Transport()
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), outbox_step(transport)]
+                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), sla_step(), outbox_step(transport)]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

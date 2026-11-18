@@ -24,6 +24,22 @@ def authorize(db, actor, draft):
         raise AccessDenied("Черновик принадлежит другому пользователю, боту или чату.")
     if draft.status not in {"draft", "checked", "saved"}:
         raise BusinessError("Черновик уже применён или отменён. Откройте актуальную запись.")
+    if draft.kind == "client_sla:return":
+        from ama.auth import require
+        obj=db.get(Work,draft.target_id)
+        if not obj or actor.person_id!=obj.partner_person_id or obj.reviewer_id!=actor.person_id or obj.status!="review":
+            raise AccessDenied("Подтверждение доступно назначенному ФП.")
+        require(db,actor,{"partner"},obj)
+        versioned(obj,draft.target_version)
+        return
+    if draft.kind.startswith("signal:"):
+        from ama.models import SLASignal
+        from ama.ui.sla import allowed
+        obj=db.get(SLASignal,draft.target_id)
+        if not obj or not allowed(db,actor,obj):
+            raise AccessDenied("Нет права реакции на сигнал SLA.")
+        versioned(obj,draft.target_version)
+        return
     if draft.kind.startswith("plan:"):
         from ama import project_flow as flow
         from ama.models import ProjectChange
@@ -143,6 +159,13 @@ def from_object(db, actor, obj):
 def execute(db, actor, draft, *, publish=False):
     authorize(db, actor, draft)
     kind, d = draft.kind, deepcopy(draft.data)
+    if kind == "client_sla:return":
+        from ama.sla import partner_return
+        obj=partner_return(db,actor,db.get(Work,draft.target_id),draft.target_version,d,"ui:"+draft.id)
+        return {"id":obj.id,"version":obj.version}
+    if kind == "signal:react":
+        from ama.sla import signal_action
+        return signal_action(db,actor,draft.target_id,draft.target_version,d)
     if kind.startswith("plan:"):
         from ama import project_flow as flow
         action=kind.split(":")[1]

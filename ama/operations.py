@@ -121,6 +121,8 @@ def operation(db, actor, work_id, expected, action, data):
         w.data = {**w.data, "opening_permission": {"at": now().isoformat(), "evidence": data["evidence"]}}
     else:
         raise BusinessError("Неизвестная профильная операция.")
+    from ama.sla import refresh_deadline
+    refresh_deadline(db,w,"profile_operation:"+action)
     w.version += 1
     make_timer(db, w, "deadline", w.due_at)
     stamp(db, actor, w, action.upper(), old, data, role)

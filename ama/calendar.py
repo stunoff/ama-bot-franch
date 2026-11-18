@@ -48,3 +48,26 @@ class Calendar:
                 if days <= 0:
                     return datetime.combine(day, self.end, self.tz).astimezone(timezone.utc).replace(tzinfo=None)
         raise BusinessError("Нет рабочего дня.")
+
+    def end_today(self, start):
+        local = start.replace(tzinfo=timezone.utc).astimezone(self.tz)
+        end = datetime.combine(local.date(), self.end, self.tz)
+        if self.working(local.date()) and local < end:
+            return end.astimezone(timezone.utc).replace(tzinfo=None)
+        # Outside working time, the next available working day is the same SLA day.
+        opened = self.add_minutes(start, 0).replace(tzinfo=timezone.utc).astimezone(self.tz)
+        return datetime.combine(opened.date(), self.end, self.tz).astimezone(timezone.utc).replace(tzinfo=None)
+
+    def shift_workdays(self, start, days):
+        """Preserve local time for 2/4/5-day reminders and day-before notices."""
+        local = start.replace(tzinfo=timezone.utc).astimezone(self.tz)
+        day = local.date()
+        left = abs(days)
+        direction = 1 if days >= 0 else -1
+        for _ in range(4000):
+            if not left:
+                return datetime.combine(day, local.timetz(), self.tz).astimezone(timezone.utc).replace(tzinfo=None)
+            day += timedelta(days=direction)
+            if self.working(day):
+                left -= 1
+        raise BusinessError("Нет рабочего дня для сдвига срока.")

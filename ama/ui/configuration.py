@@ -196,6 +196,9 @@ def validate_record(db, kind, value, *, published=False):
                 for key in b.get("materials", []):
                     if not db.scalar(select(Record).where(Record.kind == "material", Record.key == key, Record.published.is_(True))):
                         raise BusinessError("Материал пункта не опубликован.")
+    if kind == "policy" and published and value.get("policy_type") == "sla":
+        from ama.sla import validate_profile
+        validate_profile(value)
     if kind == "policy" and published and value.get("policy_type") in {"scenario", "sla", "payment", "schedule", "faq"}:
         if not value.get("approval"):
             raise BusinessError("Укажите основание уполномоченного владельца процесса.")
@@ -271,6 +274,8 @@ def extra(db, actor, kind, d):
             obj.status, obj.external_id, obj.error = "sent", d["external_id"], None
             from ama import reminders
             reminders.on_delivered(db, obj)
+            from ama.sla import delivered
+            delivered(db, obj)
             if obj.payload.get("op") == "create_topic":
                 from ama.sale_flow import on_topic
                 on_topic(db, obj, d["external_id"])

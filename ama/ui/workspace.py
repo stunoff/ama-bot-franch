@@ -7,6 +7,7 @@ from ama.auth import roles_for
 from ama.errors import BusinessError, AccessDenied
 from ama.models import Work, Entity, Binding, Lead, Deal, Attachment, Audit, Role, Training, EstablishmentBrand, Payment, now
 from ama.service import STATUSES, versioned, queue
+from ama.sla import overdue as sla_overdue
 from ama.ui import access, business, repository as repo, schema
 from ama.ui.engine import button as B, render
 from ama.ui.controller import show, paginate, navigation, draft_screen
@@ -64,6 +65,16 @@ def work_actions(db, actor, w):
         actions.append("reschedule")
     if roles & {"curator", "support_head"}:
         actions.append("cancel")
+    from ama.sla import case_for
+    case=case_for(db,w)
+    if actor.person_id in {w.owner_id,w.reviewer_id} and not case:
+        actions.append("sla_adopt")
+    elif case and actor.person_id==w.owner_id and w.status!="review":
+        actions += ["sla_status","sla_plan"]
+        if case.data["rules"].get("input") and not case.data.get("data_complete"):
+            actions.append("sla_complete_data")
+        if case.data.get("critical_active"):
+            actions.append("sla_recovered")
     return actions
 
 
@@ -90,7 +101,12 @@ def operations(db, actor, w):
 def begin_action(db, actor, s, kind, target, data=None):
     d = business.make_draft(db, actor, kind, schema.ACTIONS.get(kind.split(":")[-1], OPERATIONS.get(kind.split(":")[-1], LEAD_ACTIONS.get(kind.split(":")[-1], DEAL_ACTIONS.get(kind.split(":")[-1], "Передача на договор")))),
                             data or {}, target=target)
-    if not schema.fields_for(kind):
+    needs_take_plan=False
+    if kind=="work:take":
+        from ama.sla import case_for
+        case=case_for(db,target)
+        needs_take_plan=bool(case and case.data["rules"].get("plan_required") and not case.data.get("plan") and not case.data["rules"].get("input") and not case.data["rules"].get("plan_window"))
+    if not schema.fields_for(kind) or kind=="work:take" and not needs_take_plan:
         from ama.ui.controller import dispatch
         return dispatch(db, actor, s, "preview", {"draft_id": d.id})
     return draft_screen(db, actor, s, {"draft_id": d.id})
@@ -106,7 +122,7 @@ def dispatch(db, actor, s, action, p):
         active = [w for w in rows if w.status != "done"]
         mine = [w for w in active if w.owner_id == actor.person_id]
         review = [w for w in active if w.status == "review" and w.reviewer_id == actor.person_id]
-        late = [w for w in active if w.due_at < now()]
+        late = [w for w in active if sla_overdue(db,w)]
         granted = {r.name for r in access.assignments(db, actor) if access.staff_role(db, actor, r.name)}
         text = f"Рабочее место · {repo.name(db, actor.person_id)}\n" + ", ".join(schema.ROLES.get(r, r) for r in sorted(granted))
         text += f"\nОткрыто: {len(active)} · Моя очередь: {len(mine)} · Приёмка: {len(review)} · Просрочено: {len(late)}"
@@ -115,6 +131,8 @@ def dispatch(db, actor, s, action, p):
         if granted & {"curator", "support_head", "marketing_manager"}:
             actions += [B("Предприятия", "enterprises"), B("Франчайзи-партнёры", "partners"), B("Создать работу…", "new", kind="create_work"), *( [B("Новый проект…", "new", kind="plan:create")] if granted & {"curator", "support_head"} else []),
                         B("Мои проекты", "pp_list"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Информационная публикация…", "new", kind="broadcast")]
+        if granted & {"support_head","curator"}:
+            actions.append(B("Контроль SLA", "sla_list"))
         if "chief_marketer" in granted:
             actions.append(B("Внутренние консультации", "experts"))
         if "consultant" in granted:
@@ -139,12 +157,12 @@ def dispatch(db, actor, s, action, p):
         rows = [w for w in rows if (mode == "all" or mode == "done" and w.status == "done" or mode != "done" and w.status != "done")
                 and (mode != "mine" or w.owner_id == actor.person_id or w.pending_owner_id == actor.person_id)
                 and (mode != "review" or w.status == "review" and w.reviewer_id == actor.person_id)
-                and (mode != "blockers" or w.data.get("blockers") or w.due_at < now())
+                and (mode != "blockers" or w.data.get("blockers") or sla_overdue(db,w))
                 and (mode != "requests" or w.kind in {"support", "marketing"})
-                and (mode != "overdue" or w.due_at < now()) and (mode != "waiting" or w.status.startswith("waiting_"))
+                and (mode != "overdue" or sla_overdue(db,w)) and (mode != "waiting" or w.status.startswith("waiting_"))
                 and (not search or search.casefold() in (w.title+" "+w.id+" "+repo.entity_name(db, w.establishment_id)).casefold())]
         items, page = paginate(rows, p.get("page", 0))
-        actions = [B(("⚠ " if w.status != "done" and w.due_at < now() else "")+w.title, "work", work_id=w.id) for w in items]
+        actions = [B(("⚠ " if w.status != "done" and sla_overdue(db,w) else "")+w.title, "work", work_id=w.id) for w in items]
         params = {k: v for k, v in p.items() if k not in {"page"}}
         actions += navigation(action, page, len(rows), **params)
         text = ("Календарь фактических сроков" if action == "calendar" else FILTERS.get(mode, mode)) + f"\nРабот: {len(rows)}."
@@ -158,7 +176,7 @@ def dispatch(db, actor, s, action, p):
         w = work(db, actor, p["work_id"])
         detail = access.can_work(db, actor, w, detail=True)
         text = f"{w.title}\n{STATUSES[w.status]}\nФП: {repo.entity_name(db, w.partner_id)}\nПредприятие: {repo.entity_name(db, w.establishment_id)}\nБренд: {repo.entity_name(db, w.brand_id)}\nОтветственный: {repo.name(db, w.owner_id)}\nПринимающий: {repo.name(db, w.reviewer_id)}\nСрок: {date_text(db, w)}"
-        if w.status != "done" and w.due_at < now():
+        if w.status != "done" and sla_overdue(db,w):
             text += "\n⚠ Срок просрочен."
         if w.original_due_at:
             text += "\nИсходный срок: " + date_text(db, w, w.original_due_at)
@@ -173,6 +191,8 @@ def dispatch(db, actor, s, action, p):
             for key, label in {"expected_result": "Ожидаемый результат", "result_description": "Результат", "rejection": "Замечание"}.items():
                 if w.data.get(key):
                     text += f"\n{label}: {w.data[key]}"
+            from ama.sla import text as sla_text
+            text += "\n" + sla_text(db,w)
             if w.data.get("blockers"):
                 text += "\nБлокирующие замечания: " + "; ".join(w.data["blockers"])
             actions += [B(schema.ACTIONS[a]+"…", "work_action", work_id=w.id, expected=w.version, action=a) for a in work_actions(db, actor, w)]
@@ -280,6 +300,8 @@ def dispatch(db, actor, s, action, p):
             if b.brand_id in brand_ids:
                 text += "\nКлиентский чат: "+repo.entity_name(db, b.brand_id)+" · "+b.platform+" · "+b.chat_id
         for w in visible:
+            from ama.sla import text as sla_text
+            text += "\n" + sla_text(db,w)
             if w.data.get("blockers"):
                 text += "\nБлокеры «"+w.title+"»: "+"; ".join(w.data["blockers"])
             if w.kind == "digital" and access.can_work(db, actor, w, detail=True):

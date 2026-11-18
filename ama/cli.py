@@ -110,6 +110,8 @@ def main():
             obj.status, obj.external_id = "sent", args.external_id
             from ama import reminders
             reminders.on_delivered(db, obj)
+            from ama.sla import delivered
+            delivered(db, obj)
             db.add(Audit(object_id=obj.id, action="OPERATOR_DELIVERY_CONFIRMED", data={"external_id": args.external_id}))
 
 

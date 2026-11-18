@@ -1,5 +1,6 @@
 """Declarative typed fields. Users enter text and choose buttons, never JSON."""
 from copy import deepcopy
+from ama.sla_rules import CATEGORIES
 
 ROLES = {"admin": "Системный администратор", "partner": "Франчайзи-партнёр", "observer": "Наблюдатель",
          "curator": "Куратор", "support_head": "Руководитель сопровождения", "marketing_manager": "Менеджер маркетинга",
@@ -20,7 +21,7 @@ KINDS = {"support": "Обращение ФП", "marketing": "Маркетинг�
          "legal": "Юридическая работа", "internal_opening": "Внутреннее открытие", "technical_opening": "Техническое открытие",
          "official_opening": "Официальное открытие", **{k: v for k, v in PURPOSES.items() if k not in {"management", "client", "sales"}}}
 PRIORITIES = {"normal": "Обычный", "important": "Важный", "urgent": "Срочный", "critical": "Критичный"}
-ACTIONS = {"take": "Взять в работу", "submit": "Результат готов", "accept": "Принять результат", "reject": "Вернуть на доработку",
+ACTIONS = {"sla_adopt":"Подключить SLA", "sla_plan":"Плановая дата результата", "sla_complete_data":"Данные комплектны", "sla_status":"Содержательный статус", "sla_recovered":"Восстановление / обходной способ", "take": "Взять в работу", "submit": "Результат готов", "accept": "Принять результат", "reject": "Вернуть на доработку",
            "wait_partner": "Запросить данные ФП", "wait_uk": "Запросить действие УК", "wait_external": "Ожидать внешнюю сторону",
            "resume": "Возобновить работу", "handoff": "Передать в другое направление", "handoff_accept": "Принять передачу",
            "cancel": "Отменить работу", "reschedule": "Изменить срок"}
@@ -91,6 +92,7 @@ POLICIES = {
     "sla": [f("title", "Название профиля", required=True), ref("route", "Контур", "record:route", True),
             choice("priority", "Приоритет", PRIORITIES, True), f("take_minutes", "Срок принятия, минуты", "int", True, minimum=1),
             f("result_minutes", "Срок результата, минуты", "int", True, minimum=1),
+            choice("category","Категория",CATEGORIES),
             choice("counter", "Счёт времени", {"working": "Рабочее", "calendar": "Календарное"}, True),
             f("reminders", "Интервалы напоминаний, минуты", "integers"), f("approval", "Подтверждение владельца процесса", required=True)],
     "source": [f("title", "Название источника", required=True), f("source_id", "Идентификатор источника", "key", True),
@@ -116,6 +118,19 @@ POLICIES = {
 
 
 def fields_for(kind):
+    if kind == "work:take":
+        return [f("due_at","Плановый результат для длительной работы (для обычной не требуется)","datetime"),f("reason","Объём / этап поиска и основание даты")]
+    if kind == "client_sla:return":
+        return [f("reason","Что осталось нерешённым",required=True)]
+    if kind == "signal:react":
+        return [f("reaction","Принятое решение / действие",required=True), f("next_check","Следующий контроль","datetime"), f("close_signal","Контрольный сигнал урегулирован (исходная работа не закрывается)","bool")]
+    if kind.startswith("work:sla_"):
+        action=kind.split(":")[1]
+        return {"sla_adopt": [], "sla_plan": [f("due_at","Плановая дата результата","datetime",True),REASON,f("approval","Основание индивидуального срока")],
+                "sla_complete_data": [f("evidence","Проверенные данные и основание комплектности",required=True),f("due_at","Плановый результат для длительной работы","datetime"),f("reason","Объём и основание плановой даты")],
+                "sla_status": [f("status_text","Содержательный статус",required=True),f("evidence","Основание статуса",required=True),f("next_check","Следующее действие (для неаварийных работ)","datetime")],
+                "sla_recovered": [f("status_text","Восстановление / обходной способ",required=True),f("evidence","Подтверждение восстановления или согласования обхода",required=True),choice("resolution","Итог",{"restored":"Работа восстановлена","agreed_workaround":"Обходной способ согласован"},True)]}.get(action,[])
+
     if kind.startswith("plan:"):
         from ama.ui.project_schema import fields
         return fields(kind.split(":")[1])
@@ -199,7 +214,7 @@ def fields_for(kind):
         return [f("title", "Название / ожидаемый результат", required=True, maximum=250), choice("kind", "Вид работы", KINDS, True),
                 ref("partner_id", "ФП", "partner", True), ref("establishment_id", "Предприятие", "establishment"), ref("brand_id", "Бренд", "brand"),
                 *deepcopy(BLOCK[4:11]), choice("priority", "Приоритет", PRIORITIES, True),
-                f("data", "Требования и зависимости", "object", fields=deepcopy(BLOCK[-1]["fields"]))]
+                f("data", "Требования и зависимости", "object", fields=deepcopy(BLOCK[-1]["fields"])+[choice("sla_category","Категория SLA",CATEGORIES),f("incident","Реальная авария: влияние, основание и подтверждённые симптомы")])]
     if kind == "project":
         return [ref("partner_id", "ФП", "partner", True), ref("establishment_id", "Предприятие", "establishment", True), ref("brand_id", "Бренд", "brand"),
                 choice("scenario", "Ситуация", SCENARIOS, True), f("blocks", "Состав работ", "list", fields=deepcopy(BLOCK))]
@@ -222,6 +237,10 @@ def fields_for(kind):
         if action.startswith("wait_"):
             fields = [f("party", "Кого ждём", required=True), f("required", "Какое действие / материал нужен", required=True),
                       f("next_check", "Следующая контрольная дата", "datetime", True)]
+        if action == "wait_partner":
+            fields += [f("reason","Почему действие невозможно без этих данных (обязательно для SLA)")]
+        if action == "wait_external":
+            fields += [f("sent_information","Какие сведения уже отправлены внешней стороне (обязательно для SLA)")]
         if action == "submit":
             fields = [f("result_description", "Что сделано", required=True)]
         return fields

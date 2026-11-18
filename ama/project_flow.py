@@ -392,6 +392,12 @@ def date_action(db, actor, project_id, version, data):
         data.get("evidence") or data.get("reason") or "Изменение плана",
     )
     p.dates = dates
+    if name == "planned_technical":
+        from ama.sla import case_for,opening_check
+        for work in db.scalars(select(Work).where(Work.project_id==p.id,Work.kind=="digital",Work.status!="done")):
+            case=case_for(db,work)
+            if case:
+                opening_check(db,case,work)
     p.version += 1
     if name == "actual_internal":
         p.stage = "internal_testing"
@@ -505,7 +511,10 @@ def launch(db, p, b, route, origin=None, title=None):
     )
     db.add(w)
     db.flush()
-    make_timer(db, w, "deadline", due)
+    from ama.sla import initialize
+    fixed_date=bool((item.get("anchor", "").startswith("planned_") and p.dates.get(item["anchor"])) or (b.code=="readiness" and p.dates.get("planned_technical")) or (origin and origin.startswith("campaign:")))
+    initialize(db, w, explicit_due=fixed_date)
+    make_timer(db, w, "deadline", w.due_at)
     stamp(db, None, w, "PROJECT_WORK_CREATED", data={"project_id": p.id, "block_id": b.id})
     queue(
         db,
@@ -1167,4 +1176,6 @@ def work_details(db, actor, work_id, version, data):
         old=w.version - 1,
         data={"step": action, "before": before, "after": w.data},
     )
+    from ama.sla import refresh_deadline
+    refresh_deadline(db,w,"project_evidence")
     return {"id": w.id, "version": w.version}

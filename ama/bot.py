@@ -57,6 +57,8 @@ def card(db, actor, w):
         if w.status in {"in_progress", "rework", "materials"}:
             buttons.append(["Результат готов", f"af:a:{w.id}:{w.version}:submit"])
     if actor.person_id == w.reviewer_id and w.status == "review":
+        if actor.person_id==w.partner_person_id and w.data.get("partner_request"):
+            buttons.append(["Проблема не решена…",f"af:return:{w.id}"])
         buttons.append(["Принять", f"af:a:{w.id}:{w.version}:accept"])
     if actor.person_id == w.pending_owner_id and actor.binding_id == w.pending_binding_id:
         buttons.append(["Принять передачу", f"af:a:{w.id}:{w.version}:handoff_accept"])
@@ -180,6 +182,9 @@ def handle(db, platform, raw):
             return
     if event.callback:
         p = event.callback.split(":")
+        if p[1] == "return":
+            ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"sla_client_return",{"work_id":p[2]}))
+            return
         if internal and p[1] in {"w", "a"}:
             ui_access.require_staff(db, actor)
             screen = ui.session(db, actor)
@@ -202,6 +207,9 @@ def handle(db, platform, raw):
             text = "/" + p[1]
     command, _, arg = text.partition(" ")
     command = command.split("@")[0].lower()
+    if command == "/sla" and not arg:
+        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"sla_list"))
+        return
     if command == "/projects" and not arg:
         ui.reply(db, actor, event, ui.dispatch(db,actor,ui.session(db,actor),"pp_list"))
         return

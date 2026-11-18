@@ -222,10 +222,15 @@ def config_command(db, actor, obj, command, data=None, kind=None):
 
 
 def dispatch(db, actor, s, action, p):
+    if action.startswith("sla_"):
+        from ama.ui.sla import dispatch as sla_ui
+        return sla_ui(db,actor,s,action,p)
     if action.startswith("pp_"):
         from ama.ui.projects import dispatch as project_ui
         return project_ui(db,actor,s,action,p)
     if action == "home":
+        if db.get(Binding,actor.binding_id).purpose == "client":
+            return show(db,actor,s,"Решение сохранено. /start — главное меню.",[B("Мои проекты","pp_list")])
         if repo.is_admin(db, actor) and not access.staff(db, actor):
             return dispatch(db, actor, s, "settings", {})
         from ama.ui.workspace import dispatch as workspace

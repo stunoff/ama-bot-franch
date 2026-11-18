@@ -85,7 +85,7 @@ def create_work(db, actor, data, key):
         data = {**data, "owner_id": route["owner_id"], "reviewer_id": route["reviewer_id"],
                 "binding_id": route["binding_id"], "client_binding_id": binding.id,
                 "partner_person_id": actor.person_id, "calendar": route["calendar"]}
-    reserved = {"paid_started_at", "offer_accepted", "opening_permission", "components", "ledger", "balance_minor", "overdue"}
+    reserved = {"sla", "sla_case", "partner_request", "paid_started_at", "offer_accepted", "opening_permission", "components", "ledger", "balance_minor", "overdue"}
     if reserved.intersection(data.get("data", {})):
         raise BusinessError("Подтверждения создаются профильной командой, а не начальными полями работы.")
     validate_scope(db, data["partner_id"], data.get("brand_id"), data.get("establishment_id"))
@@ -110,7 +110,7 @@ def create_work(db, actor, data, key):
                 owner_id=data["owner_id"], executor_id=data["owner_id"], reviewer_id=data["reviewer_id"],
                 binding_id=target.id, client_binding_id=client.id if client else None,
                 partner_person_id=data.get("partner_person_id"), due_at=due, original_due_at=due,
-                data={**data.get("data", {}), "calendar": data.get("calendar", "support")}, priority=data.get("priority", "normal"),
+                data={**data.get("data", {}), "partner_request": role == "partner", "calendar": data.get("calendar", "support")}, priority=data.get("priority", "normal"),
                 parent_id=data.get("parent_id"), project_id=data.get("project_id"), origin_key=data.get("origin_key"))
     if not active_person_role(db, work.owner_id, STAFF | {"partner"}, work):
         raise BusinessError("Исполнитель не имеет действующей роли в области работы.")
@@ -126,6 +126,8 @@ def create_work(db, actor, data, key):
         require(db, actor, {"curator", "support_head", "marketing_manager"}, scope)
     db.add(work)
     db.flush()
+    from ama.sla import initialize
+    initialize(db, work, explicit_due=bool(data.get("due_at")))
     stamp(db, actor, work, "WORK_CREATED", role=role)
     make_timer(db, work, "deadline", due)
     queue(db, target, f"created:{work.id}", f"Новая работа: {work.title}\nID: {work.id}", work=work,
@@ -158,6 +160,8 @@ def transition(db, actor, work_id, version, action, data, key):
         raise BusinessError("Работа завершена.")
     from ama.project_flow import before_transition
     before_transition(db, actor, w, action, data)
+    from ama.sla import before_transition as sla_before
+    sla_before(db,w,action)
     old = w.version
     role = None
     if action == "take":
@@ -208,7 +212,11 @@ def transition(db, actor, work_id, version, action, data, key):
                 child = db.get(Work, dep)
                 if not child or child.outcome != "accepted":
                     raise BusinessError("Зависимый результат не принят.")
-            w.status, w.outcome = "done", "partner_confirmed" if role == "partner" else "accepted"
+            if w.kind == "support" and w.data.get("partner_request") and w.partner_person_id and actor.person_id != w.partner_person_id:
+                w.data = {**w.data, "technical_reviewer_id": w.reviewer_id, "technical_result_accepted": True}
+                w.status, w.owner_id, w.reviewer_id = "review", w.partner_person_id, w.partner_person_id
+            else:
+                w.status, w.outcome = "done", "partner_confirmed" if role == "partner" else "accepted"
         else:
             if not data.get("reason") or not data.get("due_at"):
                 raise BusinessError("Для возврата нужны замечание и новый срок.")
@@ -216,6 +224,8 @@ def transition(db, actor, work_id, version, action, data, key):
             if w.due_at <= now():
                 raise BusinessError("Новый срок должен быть в будущем.")
             w.status, w.owner_id = "rework", w.executor_id
+            if actor.person_id == w.partner_person_id and w.data.get("technical_reviewer_id"):
+                w.reviewer_id = w.data["technical_reviewer_id"]
             w.returns += 1
             w.data = {**w.data, "rejection": data["reason"]}
     elif action in {"wait_partner", "wait_external", "wait_uk"}:
@@ -224,11 +234,16 @@ def transition(db, actor, work_id, version, action, data, key):
             raise AccessDenied("Ожидание устанавливает текущий ответственный.")
         if not all(data.get(k) for k in ("party", "required", "next_check")):
             raise BusinessError("Укажите сторону, ожидаемое действие и дату следующей проверки.")
+        from ama.sla import case_for
+        if case_for(db,w) and action=="wait_partner" and not data.get("reason"):
+            raise BusinessError("Укажите, почему конкретное действие невозможно продолжить без данных ФП.")
+        if case_for(db,w) and action=="wait_external" and not data.get("sent_information"):
+            raise BusinessError("Зафиксируйте, какие сведения уже отправлены внешней стороне.")
         w.status = {"wait_partner": "waiting_partner", "wait_external": "waiting_external", "wait_uk": "waiting_uk"}[action]
         w.due_at = parse_date(data["next_check"])
         if w.due_at <= now():
             raise BusinessError("Проверка должна быть назначена в будущем.")
-        w.data = {**w.data, "waiting": {k: data[k] for k in ("party", "required", "next_check")}}
+        w.data = {**w.data, "waiting": {k: data[k] for k in ("party", "required", "next_check", "reason", "sent_information") if k in data}}
     elif action == "resume":
         role = require(db, actor, STAFF, w)
         if actor.person_id != w.owner_id or not w.status.startswith("waiting_"):
@@ -271,6 +286,9 @@ def transition(db, actor, work_id, version, action, data, key):
             raise BusinessError("Новый срок должен быть в будущем.")
         w.data = {**w.data, "deadline_change": {"reason": data["reason"], "previous": w.due_at.isoformat()}}
         w.due_at = changed
+    elif action.startswith("sla_"):
+        from ama.sla import action as sla_action
+        role = sla_action(db, actor, w, action, data)
     elif action == "cancel":
         role = require(db, actor, {"curator", "support_head"}, w)
         if not data.get("reason"):
@@ -278,6 +296,8 @@ def transition(db, actor, work_id, version, action, data, key):
         w.status, w.outcome = "done", "cancelled"
     else:
         raise BusinessError("Неизвестное действие.")
+    from ama.sla import on_transition
+    on_transition(db, actor, w, action, data)
     w.version += 1
     for t in db.scalars(select(Timer).where(Timer.work_id == w.id, Timer.status == "pending")):
         t.status = "cancelled"
@@ -287,7 +307,7 @@ def transition(db, actor, work_id, version, action, data, key):
     queue(db, db.get(Binding, (w.review_binding_id or w.binding_id) if w.status == "review" else w.binding_id), f"state:{w.id}:{w.version}",
           f"{w.title}\n{STATUSES[w.status]}\nОтветственный: {w.owner_id}\nID: {w.id}", work=w,
           buttons=[["Открыть", f"af:w:{w.id}"]])
-    if action == "accept":
+    if action == "accept" and w.status == "done":
         from ama.models import ProjectBlock, ProjectPlan
         for block in db.scalars(select(ProjectBlock).where(ProjectBlock.work_id == w.id)):
             block.status = "accepted"

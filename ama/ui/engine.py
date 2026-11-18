@@ -41,7 +41,11 @@ def view_draft(db, actor, draft_id):
     d = db.scalar(select(UIDraft).where(UIDraft.id == draft_id).with_for_update())
     if not d or d.person_id != actor.person_id or d.binding_id != actor.binding_id or d.bot_id != settings().bot_id:
         raise AccessDenied("Черновик принадлежит другому человеку или чату.")
-    if d.kind.startswith("plan:"):
+    if d.kind == "client_sla:return":
+        business.authorize(db,actor,d)
+    elif d.kind.startswith("signal:"):
+        business.authorize(db,actor,d)
+    elif d.kind.startswith("plan:"):
         if d.kind == "plan:create":
             access.require_staff(db, actor)
         else:

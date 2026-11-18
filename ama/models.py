@@ -588,3 +588,41 @@ class ProjectCampaign(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     data: Mapped[dict] = mapped_column(JSON)
+
+
+class SLACase(Base):
+    __tablename__ = "sla_cases"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id"), unique=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SLASignal(Base):
+    __tablename__ = "sla_signals"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id"), index=True)
+    event_key: Mapped[str] = mapped_column(String(180), unique=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    critical: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(24), default="open")
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
+    due_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SLAEvent(Base):
+    __tablename__ = "sla_events"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id"), index=True)
+    signal_id: Mapped[str | None] = mapped_column(ForeignKey("sla_signals.id"), nullable=True)
+    event_key: Mapped[str] = mapped_column(String(180), unique=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    due_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
+    retry_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    data: Mapped[dict] = mapped_column(JSON, default=dict)

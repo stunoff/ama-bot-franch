@@ -17,6 +17,17 @@ def sales_role(db, actor, names):
     return role
 
 
+def authorize_scope(db, actor, obj, names):
+    from types import SimpleNamespace
+    if isinstance(obj, Lead):
+        brand, partner = obj.data.get("brand_id"), None
+    else:
+        brand, partner = obj.data.get("brand_id"), obj.data.get("partner_id")
+    area = SimpleNamespace(binding_id=actor.binding_id, client_binding_id=None,
+                           partner_id=partner, brand_id=brand, establishment_id=None)
+    return require(db, actor, names, area)
+
+
 def lead_entry(db, person_id, source, consent_version, brand_id=None):
     # Вызывается только после явного согласия, текст и версия которого опубликованы владельцем.
     record(db, "consent", consent_version)
@@ -45,6 +56,7 @@ def update_lead(db, actor, lead_id, expected, action, data):
     lead = db.scalar(select(Lead).where(Lead.id == lead_id).with_for_update())
     if not lead:
         raise BusinessError("Лид не найден.")
+    authorize_scope(db, actor, lead, {"consultant"})
     versioned(lead, expected)
     if lead.owner_id and lead.owner_id != actor.person_id:
         raise AccessDenied("Лид назначен другому консультанту.")
@@ -56,7 +68,11 @@ def update_lead(db, actor, lead_id, expected, action, data):
     elif action == "qualify":
         allowed = {"name", "contact", "city", "brand_id", "budget", "start_period", "experience", "premises",
                    "commercial_key", "commercial_version", "intent_confirmed", "requisites", "request_requisites", "exceptions"}
-        lead.data = {**lead.data, **{k: v for k, v in data.items() if k in allowed}}
+        changes = {k: v for k, v in data.items() if k in allowed}
+        if isinstance(lead.data.get("contact"), dict) and "contact" in changes:
+            changes["contact_description"] = changes.pop("contact")
+        lead.data = {**lead.data, **changes}
+        authorize_scope(db, actor, lead, {"consultant"})
         lead.stage = "qualification"
     elif action == "stage":
         if data.get("stage") not in STAGES:
@@ -93,6 +109,7 @@ def start_contract(db, actor, lead_id, expected, data):
     lead = db.scalar(select(Lead).where(Lead.id == lead_id).with_for_update())
     if not lead:
         raise BusinessError("Лид не найден.")
+    authorize_scope(db, actor, lead, {"consultant"})
     versioned(lead, expected)
     if lead.owner_id != actor.person_id:
         raise AccessDenied("Передачу выполняет консультант лида.")
@@ -125,6 +142,7 @@ def contract_action(db, actor, deal_id, expected, action, data, event_key):
     deal = db.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
     if not deal:
         raise BusinessError("Сделка не найдена.")
+    authorize_scope(db, actor, deal, {"contract"} if action != "curator_accept" else {"curator", "support_head"})
     versioned(deal, expected)
     old = deal.version
     if action == "package":

@@ -1,3 +1,4 @@
+from ama.config import settings
 import json
 import hashlib
 from sqlalchemy import select
@@ -24,7 +25,7 @@ HELP = """АМА Франчайзинг
 
 
 def send(db, event, text, buttons=None, suffix="answer"):
-    binding = db.scalar(select(Binding).where(Binding.platform == event.platform, Binding.chat_id == event.chat_id,
+    binding = db.scalar(select(Binding).where(Binding.bot_id == settings().bot_id, Binding.platform == event.platform, Binding.chat_id == event.chat_id,
                                              Binding.topic_key == event.topic))
     chunks = [text[i:i + 3500] for i in range(0, len(text), 3500)] or [""]
     for i, chunk in enumerate(chunks):
@@ -134,10 +135,15 @@ def handle(db, platform, raw):
             return handle_lead_message(db, event, account)
         return public_entry(db, event)
     binding = db.get(Binding, actor.binding_id)
+    from ama.ui import engine as ui, access as ui_access
+    internal = binding.purpose != "client"
+    if event.callback and event.callback.startswith("af:ui:"):
+        ui.reply(db, actor, event, ui.callback(db, actor, event.callback))
+        return
     if event.files:
         from ama.models import MediaGroup
         parts = event.text.split()
-        work_id = parts[1] if len(parts) > 1 and parts[0] == "/file" else None
+        work_id = parts[1] if len(parts) > 1 and parts[0] == "/file" else ui.attachment_context(db, actor) if internal else None
         for i, f in enumerate(event.files):
             group = None
             group_key = None
@@ -161,12 +167,24 @@ def handle(db, platform, raw):
         return
     text = event.text or ""
     if text and not text.startswith("/") and not event.callback:
+        response = ui.input_text(db, actor, text) if internal else None
+        if response:
+            ui.reply(db, actor, event, response)
+            return
         response = wizard.comment(db, actor, text)
         if response:
             send(db, event, *response)
             return
     if event.callback:
         p = event.callback.split(":")
+        if internal and p[1] in {"w", "a"}:
+            ui_access.require_staff(db, actor)
+            screen = ui.session(db, actor)
+            params = {"work_id": p[2]}
+            if p[1] == "a":
+                params.update(expected=int(p[3]), action=p[4])
+            ui.reply(db, actor, event, ui.dispatch(db, actor, screen, "work" if p[1] == "w" else "work_action", params))
+            return
         if p[1] == "q":
             response = wizard.advance(db, actor, p[2], int(p[3]), int(p[4]), event.key)
             send(db, event, *response)
@@ -181,6 +199,19 @@ def handle(db, platform, raw):
             text = "/" + p[1]
     command, _, arg = text.partition(" ")
     command = command.split("@")[0].lower()
+    if command == "/af_settings" and not arg:
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "settings"))
+        return
+    ui_commands = {"/start": "home", "/menu": "home", "/workspace": "workspace", "/help": "staff_help",
+                   "/tasks": "works", "/work": "work", "/enterprises": "enterprises", "/create": "new",
+                   "/project": "new", "/broadcast": "new", "/sales": "leads", "/deal": "deals",
+                   "/contract": "deals", "/op": "works", "/reports": "new", "/drafts": "drafts"}
+    if internal and command in ui_commands and (not arg or command == "/work"):
+        action = ui_commands[command]
+        params = {"work_id": arg.strip()} if command == "/work" else {"kind": {
+            "/create": "create_work", "/project": "project", "/broadcast": "broadcast", "/reports": "export"}[command]} if action == "new" else {}
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), action, params))
+        return
     if command in {"/start", "/menu"}:
         require(db, actor, {"partner", "observer", "curator", "support_head", "specialist", "marketing_manager", "admin", "consultant", "contract", "chief_marketer"})
         send(db, event, "АМА Франчайзинг · Главное меню", MENU)

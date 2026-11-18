@@ -112,6 +112,11 @@ def outbox_step(transport):
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
+            if row.payload.get("ui_actor"):
+                from ama.auth import Actor
+                from ama.ui.access import grants_hash
+                if not b or grants_hash(db, Actor(row.payload["ui_actor"], b.id)) != row.payload.get("ui_grants"):
+                    raise BusinessError("Права пользователя изменились. Откройте меню или сформируйте отчёт заново.")
             if row.payload.get("lead_id"):
                 from ama.models import Lead
                 lead = db.get(Lead, row.payload["lead_id"])
@@ -126,6 +131,9 @@ def outbox_step(transport):
                     row.retry_at = next_time
                     return True
             file_path = None
+            if row.payload.get("export_id"):
+                from ama.ui.reports import render as render_export
+                file_path = render_export(db, row.payload["export_id"])
             if row.payload.get("attachment_id"):
                 a = db.get(Attachment, row.payload["attachment_id"])
                 if not a or a.status != "stored" or not a.storage_path:
@@ -142,7 +150,11 @@ def outbox_step(transport):
             return True
     # Лок на строке отпущен, но sending не подбирается другими воркерами.
     try:
-        external_id = transport.send(platform, chat_id, topic, payload, file_path)
+        if payload.get("callback_id"):
+            transport.answer_callback(platform, payload["callback_id"])
+            external_id = None
+        else:
+            external_id = transport.send(platform, chat_id, topic, payload, file_path)
         status, error = "sent", None
     except DeliveryUncertain:
         external_id, status, error = None, "uncertain", "Delivery outcome unknown; reconcile before retry"
@@ -199,13 +211,19 @@ def reminder_step():
         return reminders.step(db)
 
 
+def substitution_step():
+    from ama.ui.configuration import substitution_step as process
+    with Session.begin() as db:
+        return process(db)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     transport = Transport()
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), outbox_step(transport)]
+                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), outbox_step(transport)]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

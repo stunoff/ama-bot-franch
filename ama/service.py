@@ -187,6 +187,8 @@ def transition(db, actor, work_id, version, action, data, key):
                 raise BusinessError("Есть непринятая зависимость.")
         if w.data.get("blockers"):
             raise BusinessError("Сначала устраните блокирующие замечания.")
+        if data.get("result_description"):
+            w.data = {**w.data, "result_description": data["result_description"]}
         w.status, w.owner_id = "review", w.reviewer_id
         cal = Calendar(record(db, "calendar", w.data.get("calendar", "support")).data)
         w.due_at = cal.end_of_workday(now())
@@ -258,6 +260,15 @@ def transition(db, actor, work_id, version, action, data, key):
         w.executor_id = w.owner_id
         w.binding_id = w.pending_binding_id
         w.pending_owner_id = w.pending_binding_id = None
+    elif action == "reschedule":
+        role = require(db, actor, STAFF, w)
+        if actor.person_id not in {w.owner_id, w.reviewer_id} or not data.get("reason"):
+            raise AccessDenied("Переносит срок текущий ответственный или принимающий с указанием причины.")
+        changed = parse_date(data.get("due_at", ""))
+        if changed <= now():
+            raise BusinessError("Новый срок должен быть в будущем.")
+        w.data = {**w.data, "deadline_change": {"reason": data["reason"], "previous": w.due_at.isoformat()}}
+        w.due_at = changed
     elif action == "cancel":
         role = require(db, actor, {"curator", "support_head"}, w)
         if not data.get("reason"):
@@ -301,6 +312,8 @@ def attach(db, actor, work_id, platform, file_id, filename, source_key, album_id
 
 def training_action(db, actor, course_key, action, expected=None):
     require(db, actor, {"partner"})
+    if db.get(Binding, actor.binding_id).purpose != "client":
+        raise AccessDenied("Ознакомление доступно из клиентского брендового чата.")
     course = record(db, "course", course_key)
     if not course.data.get("cards"):
         raise BusinessError("Карточки курса не опубликованы.")

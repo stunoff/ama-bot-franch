@@ -14,9 +14,11 @@ def operation(db, actor, work_id, expected, action, data):
     versioned(w, expected)
     old, role = w.version, None
     if action == "offer":
-        role = require(db, actor, {"curator", "marketing_manager"}, w)
+        role = require(db, actor, {"curator", "marketing_manager", "specialist"}, w)
         if db.get(Binding, w.binding_id).purpose not in {"projecting", "software", "personnel", "menu", "design", "advertising", "printing", "systems_training", "smm"}:
             raise BusinessError("В этом рабочем чате платные предложения не разрешены.")
+        if actor.person_id not in {w.owner_id, w.executor_id}:
+            raise AccessDenied("Предложение формирует назначенный исполнитель платной работы.")
         if w.kind != "paid_work" or not all(data.get(k) for k in ("scope", "amount_minor", "valid_until", "start_rule", "deadline")):
             raise BusinessError("Предложение требует объём, сумму, срок действия, правило старта и дату результата.")
         if not isinstance(data["amount_minor"], int) or data["amount_minor"] <= 0:

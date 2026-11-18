@@ -10,15 +10,29 @@ MODES = {"perform", "verify", "inherit", "not_applicable"}
 
 def configure(db, actor, data, command_key):
     """Куратор подтверждает применимость; не генерируем прошлый запуск действующего объекта."""
-    require(db, actor, {"curator", "support_head"})
+    role = require(db, actor, {"curator", "support_head", "marketing_manager"})
     validate_scope(db, data["partner_id"], data.get("brand_id"), data["establishment_id"])
     if data.get("scenario") not in SCENARIOS:
         raise BusinessError("Выберите сценарий проекта.")
     if not data.get("confirmed"):
         return {"preview": data.get("blocks", []), "message": "Подтвердите состав работ; черновик никому не отправлен."}
     est = db.get(Entity, data["establishment_id"])
+    from ama.ui.access import scope
+    from types import SimpleNamespace
+    area = SimpleNamespace(partner_id=data["partner_id"], brand_id=data.get("brand_id"), establishment_id=est.id)
+    if not scope(db, actor, area, {"curator", "support_head", "marketing_manager"}):
+        from ama.errors import AccessDenied
+        raise AccessDenied("Нет назначения в области проекта.")
+    role = "curator" if scope(db, actor, area, {"curator"}) else "support_head" if scope(db, actor, area, {"support_head"}) else "marketing_manager"
     created = []
-    for index, block in enumerate(data.get("blocks", [])):
+    for index, source_block in enumerate(data.get("blocks", [])):
+        block = dict(source_block)
+        if role == "marketing_manager":
+            allowed = {"analytics", "marketing_plan", "community_vk", "community_design", "start_smm", "design", "printing", "promotion", "campaign", "event"}
+            base = block.get("key", "").removeprefix("marketing.")
+            if base not in allowed or block.get("shared"):
+                raise BusinessError("Менеджер маркетинга изменяет только маркетинговый состав; общие допуски и даты открытия принадлежат куратору.")
+            block["key"] = "marketing." + base
         if block.get("mode") not in MODES:
             raise BusinessError("Для каждого блока выберите выполнить/проверить/наследовать/не применяется.")
         if block["mode"] in {"inherit", "not_applicable"}:

@@ -15,11 +15,14 @@ KINDS = {"calendar", "material", "course", "route", "commercial", "consent", "te
 def check_admin(db, actor):
     require(db, actor, {"admin"})
     b = db.get(Binding, actor.binding_id)
+    from ama.ui.access import assignments
+    if not any(r.name == "admin" and not any((r.partner_id, r.brand_id, r.establishment_id)) for r in assignments(db, actor)):
+        raise AccessDenied("Требуется действующее системное административное назначение.")
     if b.purpose != "management":
         raise AccessDenied("Настройки доступны в «Управление сопровождения УК».")
 
 
-def apply(db, actor, command, *, bootstrap=False):
+def _apply(db, actor, command, *, bootstrap=False):
     if not bootstrap:
         check_admin(db, actor)
     kind, d = command["type"], command["data"]
@@ -74,7 +77,7 @@ def apply(db, actor, command, *, bootstrap=False):
             raise BusinessError("Неизвестный мессенджер.")
         # Создаётся отключённым. Верификация — отдельная успешная тестовая доставка.
         obj = Binding(bot_id=settings().bot_id, platform=d["platform"], chat_id=str(d["chat_id"]),
-                      topic_key=str(d.get("topic_key", "")), purpose=d["purpose"], partner_id=d.get("partner_id"),
+                      topic_key=str(d.get("topic_key") or ""), purpose=d["purpose"], partner_id=d.get("partner_id"),
                       brand_id=d.get("brand_id"), establishment_id=d.get("establishment_id"), active=False, verified=False)
         if obj.purpose == "client" and not (obj.partner_id and obj.brand_id):
             raise BusinessError("Клиентский чат требует партнёра и бренд.")
@@ -169,6 +172,10 @@ def apply(db, actor, command, *, bootstrap=False):
         versioned(obj, d["version"])
         old = obj.version
         obj.data, obj.version = {**obj.data, **d["value"]}, obj.version + 1
+        if "name" in d:
+            if not d["name"] or len(d["name"]) > 200:
+                raise BusinessError("Название должно содержать 1–200 символов.")
+            obj.name = d["name"]
     else:
         raise BusinessError("Неизвестная настройка.")
     db.flush()
@@ -187,3 +194,71 @@ def inspect(db, actor):
                           "active": x.active, "verified": x.verified, "version": x.version} for x in db.scalars(select(Binding))],
             "configuration": [{"kind": x.kind, "key": x.key, "published": x.published, "version": x.version} for x in db.scalars(select(Record))],
             "delivery_errors": [{"id": x.id, "status": x.status, "attempts": x.attempts} for x in db.scalars(select(Outbox).where(Outbox.status.in_(["failed", "uncertain"])))]}
+
+
+
+def apply(db, actor, command, *, bootstrap=False):
+    """One administrative transaction, with durable before/after configuration history."""
+    from ama.ui.configuration import (extra, snapshot, revision, validate_record, validate_role,
+                                      validate_scope, guard_last_admin, get_person, safe_values, MODELS)
+    if not bootstrap:
+        check_admin(db, actor)
+    kind, data = command["type"], command["data"]
+    safe_values(data)
+    if kind == "role":
+        validate_role(db, data)
+    if kind in {"binding", "entity"}:
+        validate_scope(db, data)
+    if kind == "binding" and db.scalar(select(Binding).where(Binding.bot_id == settings().bot_id, Binding.platform == data["platform"],
+                Binding.chat_id == str(data["chat_id"]), Binding.topic_key == str(data.get("topic_key") or ""))):
+        raise BusinessError("Этот чат и тема уже зарегистрированы. Откройте существующую привязку.")
+    if kind == "binding" and data["platform"] == "max" and data.get("topic_key"):
+        raise BusinessError("В MAX используются логические карточки, а не Telegram topic_id.")
+    if kind == "record":
+        if data.get("owner_id"):
+            get_person(db, data["owner_id"])
+        validate_record(db, data["kind"], data["value"], published=data.get("published", False))
+    if kind == "account":
+        if db.scalar(select(Account).where(Account.platform == data["platform"], Account.external_id == str(data["external_id"]))):
+            raise BusinessError("Этот аккаунт уже привязан. Откройте существующего человека; другой человек не наследует его историю.")
+    if kind == "link_brand" and db.scalar(select(EstablishmentBrand).where(EstablishmentBrand.establishment_id == data["establishment_id"],
+                                                                         EstablishmentBrand.brand_id == data["brand_id"])):
+        raise BusinessError("Бренд уже связан с площадкой. Используйте существующую связь.")
+    if kind == "revoke_role":
+        role = db.get(Role, data["id"])
+        if role and role.bot_id != settings().bot_id:
+            raise AccessDenied("Назначение другого бота недоступно.")
+        if role and data.get("version") is not None:
+            versioned(role, data["version"])
+        if role and role.name == "admin":
+            guard_last_admin(db, role_id=role.id)
+    result = extra(db, actor, kind, data)
+    if result is not None:
+        return result
+    model_kind = {"entity_update": "entity", "link_brand": "link", "revoke_role": "role",
+                  "replace_binding": "binding", "activate_binding": "binding", "probe_binding": "binding"}.get(kind, kind)
+    model = MODELS.get(model_kind)
+    obj = None
+    if kind == "record":
+        obj = db.scalar(select(Record).where(Record.kind == data["kind"], Record.key == data["key"]).with_for_update())
+    elif model and (data.get("id") or data.get("old_id")):
+        obj = db.get(model, data.get("id") or data.get("old_id"))
+    before = snapshot(obj)
+    if kind == "entity_update" and data["value"].get("archived"):
+        target = data["id"]
+        if db.scalar(select(Work).where(Work.status != "done", (Work.partner_id == target) | (Work.brand_id == target) | (Work.establishment_id == target))):
+            raise BusinessError("Есть открытые работы. Архивирование области требует обработки обязательств.")
+        if db.scalar(select(Binding).where(Binding.active.is_(True), (Binding.partner_id == target) | (Binding.brand_id == target) | (Binding.establishment_id == target))):
+            raise BusinessError("Сначала обработайте активные привязки чатов.")
+    result = _apply(db, actor, command, bootstrap=bootstrap)
+    if model:
+        obj = db.get(model, result["id"])
+        if kind == "role" and data.get("expires_at"):
+            from ama.service import parse_date
+            obj.expires_at = parse_date(data["expires_at"])
+        if kind == "revoke_role":
+            obj.version += 1
+            result["version"] = obj.version
+        db.flush()
+        revision(db, actor, model_kind, obj, before, data.get("reason"))
+    return result

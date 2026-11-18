@@ -20,6 +20,7 @@ def now():
 
 class Identity(Base):
     __tablename__ = "people"
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
@@ -28,6 +29,7 @@ class Identity(Base):
 class Account(Base):
     __tablename__ = "accounts"
     __table_args__ = (UniqueConstraint("platform", "external_id", name="uq_account"),)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
     platform: Mapped[str] = mapped_column(String(16))
@@ -49,6 +51,7 @@ class Entity(Base):
 class EstablishmentBrand(Base):
     __tablename__ = "establishment_brands"
     __table_args__ = (UniqueConstraint("establishment_id", "brand_id", name="uq_establishment_brand"),)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     establishment_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
     brand_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
@@ -57,6 +60,7 @@ class EstablishmentBrand(Base):
 
 class Role(Base):
     __tablename__ = "roles"
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     bot_id: Mapped[str] = mapped_column(String(64), default="ama-franchising")
     person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), index=True)
@@ -318,3 +322,63 @@ class MediaGroup(Base):
     work_id: Mapped[str] = mapped_column(ForeignKey("works.id"))
     author_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
     binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+
+
+class UIScreen(Base):
+    __tablename__ = "ui_screens"
+    __table_args__ = (UniqueConstraint("bot_id", "person_id", "binding_id", name="uq_ui_screen"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    binding_version: Mapped[int] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    state: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class UIDraft(Base):
+    __tablename__ = "ui_drafts"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), index=True)
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    kind: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(250))
+    target_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    before: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="draft")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    updated_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class ConfigurationRevision(Base):
+    __tablename__ = "configuration_revisions"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    object_id: Mapped[str] = mapped_column(String(32), index=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    actor_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    old_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    before: Mapped[dict] = mapped_column(JSON, default=dict)
+    after: Mapped[dict] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class UIExport(Base):
+    __tablename__ = "ui_exports"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    binding_version: Mapped[int] = mapped_column(Integer)
+    grants_hash: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    expires_at: Mapped[datetime] = mapped_column(UTC_DATETIME)

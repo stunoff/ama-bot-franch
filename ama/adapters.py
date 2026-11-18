@@ -97,7 +97,7 @@ class Transport:
                 if file_path:
                     with open(file_path, "rb") as f:
                         data = {k: json.dumps(v) if isinstance(v, dict) else v for k, v in data.items()}
-                        response = self.client.post(url, data=data, files={"document": ("material" + file_path.suffix, f)})
+                        response = self.client.post(url, data=data, files={"document": (payload.get("filename", "material" + file_path.suffix), f)})
                 else:
                     response = self.client.post(url, json=data)
                 self._check(response)
@@ -117,7 +117,7 @@ class Transport:
                     upload_url = upload.json()["url"]
                     validate_url(upload_url)
                     with open(file_path, "rb") as f:
-                        uploaded = self.client.post(upload_url, files={"data": ("material" + file_path.suffix, f)})
+                        uploaded = self.client.post(upload_url, files={"data": (payload.get("filename", "material" + file_path.suffix), f)})
                     self._check(uploaded)
                     attachments.append({"type": "file", "payload": uploaded.json()})
                 if buttons:

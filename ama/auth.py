@@ -41,7 +41,8 @@ def roles_for(db, actor, obj=None):
         if role.expires_at and role.expires_at <= now():
             continue
         scope = obj or binding
-        if any(getattr(role, k) and getattr(role, k) != getattr(scope, k, None)
+        if any(getattr(role, k) and (obj is not None or getattr(scope, k, None) is not None)
+               and getattr(role, k) != getattr(scope, k, None)
                for k in ("partner_id", "brand_id", "establishment_id")):
             continue
         result.append(role.name)

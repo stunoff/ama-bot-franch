@@ -156,6 +156,8 @@ def transition(db, actor, work_id, version, action, data, key):
     versioned(w, version)
     if w.status == "done":
         raise BusinessError("Работа завершена.")
+    from ama.project_flow import before_transition
+    before_transition(db, actor, w, action, data)
     old = w.version
     role = None
     if action == "take":
@@ -282,9 +284,19 @@ def transition(db, actor, work_id, version, action, data, key):
     if w.status != "done":
         make_timer(db, w, "deadline", w.due_at)
     stamp(db, actor, w, action.upper(), old, data, role)
-    queue(db, db.get(Binding, w.binding_id), f"state:{w.id}:{w.version}",
+    queue(db, db.get(Binding, (w.review_binding_id or w.binding_id) if w.status == "review" else w.binding_id), f"state:{w.id}:{w.version}",
           f"{w.title}\n{STATUSES[w.status]}\nОтветственный: {w.owner_id}\nID: {w.id}", work=w,
           buttons=[["Открыть", f"af:w:{w.id}"]])
+    if action == "accept":
+        from ama.models import ProjectBlock, ProjectPlan
+        for block in db.scalars(select(ProjectBlock).where(ProjectBlock.work_id == w.id)):
+            block.status = "accepted"
+            plan = db.get(ProjectPlan, block.project_id)
+            plan.next_at = now()
+            if block.code == "d180":
+                plan.stage = "ongoing"
+                plan.version += 1
+                stamp(db, actor, plan, "STARTUP_CYCLE_COMPLETED", data={"work_id": w.id})
     db.add(Receipt(key=key, response={"id": w.id, "version": w.version}))
     return w
 

@@ -116,6 +116,9 @@ POLICIES = {
 
 
 def fields_for(kind):
+    if kind.startswith("plan:"):
+        from ama.ui.project_schema import fields
+        return fields(kind.split(":")[1])
     if kind == "config:reconcile_delivery":
         return [choice("outcome", "Проверенный исход", {"delivered": "Сообщение уже доставлено", "not_delivered": "Доставка точно не состоялась"}, True),
                 f("external_id", "ID доставленного сообщения"), f("evidence", "Как проверен фактический исход", required=True),

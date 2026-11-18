@@ -113,8 +113,8 @@ def dispatch(db, actor, s, action, p):
         actions = [B(f"Моя очередь · {len(mine)}", "works", filter="mine"), B(f"Моя приёмка · {len(review)}", "works", filter="review"),
                    B(f"Просрочено · {len(late)}", "works", filter="overdue"), B("Все доступные работы", "works"), B("Ожидания", "works", filter="waiting")]
         if granted & {"curator", "support_head", "marketing_manager"}:
-            actions += [B("Предприятия", "enterprises"), B("Франчайзи-партнёры", "partners"), B("Создать работу…", "new", kind="create_work"), B("Состав проекта…", "new", kind="project"),
-                        B("Мои проекты", "projects"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Информационная публикация…", "new", kind="broadcast")]
+            actions += [B("Предприятия", "enterprises"), B("Франчайзи-партнёры", "partners"), B("Создать работу…", "new", kind="create_work"), *( [B("Новый проект…", "new", kind="plan:create")] if granted & {"curator", "support_head"} else []),
+                        B("Мои проекты", "pp_list"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Информационная публикация…", "new", kind="broadcast")]
         if "chief_marketer" in granted:
             actions.append(B("Внутренние консультации", "experts"))
         if "consultant" in granted:
@@ -289,7 +289,7 @@ def dispatch(db, actor, s, action, p):
                 text += "\nКЦ согласован: "+("Да" if passport.get("call_center_applicable") else "Не подтверждено")
                 for key in w.data.get("required_components", []):
                     text += "\n"+{"ama_rs": "АМА РС", "care": "Служба заботы", "call_center": "КЦ"}.get(key, key)+": "+("подключение подтверждено" if w.data.get("components", {}).get(key, {}).get("confirmed") else "не принято")
-        actions = [B("Работы предприятия", "works", establishment_id=e.id), B("Календарь сроков", "calendar", establishment_id=e.id), B("Состав проекта…", "new", kind="project", data={"partner_id": e.partner_id, "establishment_id": e.id}), B("← Предприятия", "enterprises"), B("В меню", "home")]
+        actions = [B("Работы предприятия", "works", establishment_id=e.id), B("Календарь сроков", "calendar", establishment_id=e.id), B("Новый проект…", "new", kind="plan:create", data={"partner_id": e.partner_id, "establishment_id": e.id}), B("← Предприятия", "enterprises"), B("В меню", "home")]
         return show(db, actor, s, text, actions, "enterprise", **p)
     if action == "leads":
         rows = access.leads(db, actor)

@@ -114,14 +114,20 @@ def _apply(db, actor, command, *, bootstrap=False):
         new.active, new.version = True, new.version + 1
         if new.purpose == "client":
             new.active_client_key = f"{settings().bot_id}:{new.partner_id}:{new.brand_id}"
-        for w in db.scalars(select(Work).where((Work.binding_id == obj.id) | (Work.client_binding_id == obj.id) | (Work.pending_binding_id == obj.id)).with_for_update()):
+        for w in db.scalars(select(Work).where((Work.binding_id == obj.id) | (Work.client_binding_id == obj.id) | (Work.pending_binding_id == obj.id) | (Work.review_binding_id == obj.id)).with_for_update()):
             if w.binding_id == obj.id:
                 w.binding_id = new.id
             if w.client_binding_id == obj.id:
                 w.client_binding_id = new.id
+            if w.review_binding_id == obj.id:
+                w.review_binding_id = new.id
             if w.pending_binding_id == obj.id:
                 w.pending_binding_id = new.id
             # Версии работы не меняются: бизнес-состояние и действующий срок остаются прежними.
+        from ama.models import ProjectPlan
+        for plan in db.scalars(select(ProjectPlan).where(ProjectPlan.client_binding_id == obj.id).with_for_update()):
+            plan.client_binding_id = new.id
+            plan.version += 1
         for event in db.scalars(select(Outbox).where(Outbox.binding_id == obj.id, Outbox.status.in_(["pending", "failed"]))):
             event.binding_id, event.binding_version = new.id, new.version
             event.platform, event.chat_id, event.topic_key = new.platform, new.chat_id, new.topic_key

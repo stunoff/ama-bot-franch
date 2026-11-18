@@ -11,7 +11,7 @@ from ama.service import queue, create_work, transition, attach, training_action,
 from ama import admin, sales, projects, broadcasts, operations, wizard, reminders
 
 MENU = [["Предприятия", "af:enterprises"], ["Мои задачи", "af:tasks"], ["Ознакомление", "af:training"],
-        ["База знаний", "af:knowledge"], ["Задать вопрос", "af:new"], ["Помощь", "af:help"]]
+        ["База знаний", "af:knowledge"], ["Задать вопрос", "af:new"], ["Мои проекты", "af:projects"], ["Помощь", "af:help"]]
 HELP = """АМА Франчайзинг
 /start — меню; /tasks — задачи; /enterprises — предприятия
 /training — персональное ознакомление; /knowledge — материалы
@@ -170,7 +170,7 @@ def handle(db, platform, raw):
         return
     text = event.text or ""
     if text and not text.startswith("/") and not event.callback:
-        response = ui.input_text(db, actor, text) if internal else None
+        response = ui.input_text(db, actor, text)
         if response:
             ui.reply(db, actor, event, response)
             return
@@ -202,6 +202,9 @@ def handle(db, platform, raw):
             text = "/" + p[1]
     command, _, arg = text.partition(" ")
     command = command.split("@")[0].lower()
+    if command == "/projects" and not arg:
+        ui.reply(db, actor, event, ui.dispatch(db,actor,ui.session(db,actor),"pp_list"))
+        return
     if command == "/af_settings" and not arg:
         ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "settings"))
         return

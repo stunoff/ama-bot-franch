@@ -24,6 +24,28 @@ def authorize(db, actor, draft):
         raise AccessDenied("Черновик принадлежит другому пользователю, боту или чату.")
     if draft.status not in {"draft", "checked", "saved"}:
         raise BusinessError("Черновик уже применён или отменён. Откройте актуальную запись.")
+    if draft.kind.startswith("plan:"):
+        from ama import project_flow as flow
+        from ama.models import ProjectChange
+        action=draft.kind.split(":")[1]
+        if action == "create":
+            obj=SimpleNamespace(partner_id=draft.data.get("partner_id"),brand_id=draft.data.get("brand_id"),establishment_id=draft.data.get("establishment_id"),curator_id=actor.person_id)
+            flow.authorize(db,actor,obj,"curator")
+        elif action == "approval":
+            obj=db.get(ProjectChange,draft.target_id)
+            if not obj or actor.person_id not in obj.data["required"]:
+                raise AccessDenied("Нет назначения согласующего.")
+            versioned(obj,draft.target_version)
+        elif action == "evidence":
+            obj=db.get(Work,draft.target_id)
+            if not obj or not access.can_work(db,actor,obj,detail=True):
+                raise AccessDenied("Работа недоступна.")
+            versioned(obj,draft.target_version)
+        else:
+            obj=flow.get(db,draft.target_id)
+            flow.authorize(db,actor,obj,draft.data.get("lane") if action=="filter" else "marketing" if action=="campaign" else None if action=="change" else "curator")
+            versioned(obj,draft.target_version)
+        return
     if draft.kind.startswith(("case:", "expert:")):
         from ama import sale_flow
         from ama.models import SalesExpert
@@ -121,6 +143,17 @@ def from_object(db, actor, obj):
 def execute(db, actor, draft, *, publish=False):
     authorize(db, actor, draft)
     kind, d = draft.kind, deepcopy(draft.data)
+    if kind.startswith("plan:"):
+        from ama import project_flow as flow
+        action=kind.split(":")[1]
+        if action=="create":
+            return flow.create(db,actor,d,draft.id)
+        handlers={"filter":flow.configure,"profile":flow.set_profile,"date":flow.date_action,
+                  "remark":flow.remark,"close_remark":flow.remark,"approval":flow.approve_change,"evidence":flow.work_details}
+        if action in {"change","campaign"}:
+            handler=flow.request_change if action=="change" else flow.campaign
+            return handler(db,actor,draft.target_id,draft.target_version,d,draft.id)
+        return handlers[action](db,actor,draft.target_id,draft.target_version,d)
     if kind.startswith("case:"):
         from ama.sale_flow import action
         return action(db, actor, draft.target_id, draft.target_version, kind.split(":")[1], d, "ui:"+draft.id)

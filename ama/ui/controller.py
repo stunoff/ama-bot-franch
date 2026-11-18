@@ -222,6 +222,9 @@ def config_command(db, actor, obj, command, data=None, kind=None):
 
 
 def dispatch(db, actor, s, action, p):
+    if action.startswith("pp_"):
+        from ama.ui.projects import dispatch as project_ui
+        return project_ui(db,actor,s,action,p)
     if action == "home":
         if repo.is_admin(db, actor) and not access.staff(db, actor):
             return dispatch(db, actor, s, "settings", {})

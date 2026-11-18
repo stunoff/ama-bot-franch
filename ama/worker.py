@@ -108,7 +108,7 @@ def outbox_step(transport):
                 return True
             if row.work_id:
                 w = db.get(Work, row.work_id)
-                if not w or b.id not in {w.binding_id, w.pending_binding_id, w.client_binding_id}:
+                if not w or b.id not in {w.binding_id, w.pending_binding_id, w.client_binding_id, w.review_binding_id}:
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
@@ -267,13 +267,19 @@ def sales_step():
         return tick(db)
 
 
+def project_step():
+    from ama.project_flow import tick
+    with Session.begin() as db:
+        return tick(db)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     transport = Transport()
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), outbox_step(transport)]
+                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), outbox_step(transport)]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

@@ -27,6 +27,8 @@ def roles_for(db, actor, obj=None):
         raise AccessDenied("Привязка чата отключена.")
     if obj:
         allowed = {obj.binding_id, obj.client_binding_id}
+        if isinstance(obj, Work) and obj.review_binding_id and actor.person_id == obj.reviewer_id:
+            allowed.add(obj.review_binding_id)
         if isinstance(obj, Work) and obj.pending_binding_id:
             allowed.add(obj.pending_binding_id)
         if binding.id not in allowed:

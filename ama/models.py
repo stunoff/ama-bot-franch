@@ -125,6 +125,7 @@ class Work(Base):
     partner_person_id: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
     binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
     client_binding_id: Mapped[str | None] = mapped_column(ForeignKey("chat_bindings.id"), nullable=True)
+    review_binding_id: Mapped[str | None] = mapped_column(ForeignKey("chat_bindings.id"), nullable=True)
     pending_owner_id: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
     pending_binding_id: Mapped[str | None] = mapped_column(ForeignKey("chat_bindings.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
@@ -473,3 +474,117 @@ class DealInterest(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     deal_id: Mapped[str] = mapped_column(ForeignKey("deals.id"), index=True)
     case_id: Mapped[str] = mapped_column(ForeignKey("sales_cases.id"), unique=True)
+
+
+class ProjectPlan(Base):
+    __tablename__ = "project_plans"
+    next_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now, index=True)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(250))
+    partner_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
+    establishment_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
+    brand_id: Mapped[str | None] = mapped_column(ForeignKey("entities.id"), nullable=True)
+    curator_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    marketing_manager_id: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
+    partner_person_id: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
+    client_binding_id: Mapped[str | None] = mapped_column(ForeignKey("chat_bindings.id"), nullable=True)
+    source_deal_id: Mapped[str | None] = mapped_column(ForeignKey("deals.id"), nullable=True)
+    scenario: Mapped[str] = mapped_column(String(40))
+    stage: Mapped[str] = mapped_column(String(40), default="preparation")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    dates: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class ProjectLane(Base):
+    __tablename__ = "project_lanes"
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_project_lane"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project_plans.id"))
+    name: Mapped[str] = mapped_column(String(32))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ProjectBlock(Base):
+    __tablename__ = "project_blocks"
+    __table_args__ = (UniqueConstraint("project_id", "code", name="uq_project_block"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project_plans.id"), index=True)
+    code: Mapped[str] = mapped_column(String(100))
+    lane: Mapped[str] = mapped_column(String(32))
+    mode: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(32), default="waiting")
+    work_id: Mapped[str | None] = mapped_column(ForeignKey("works.id"), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FacilityResult(Base):
+    __tablename__ = "facility_results"
+    __table_args__ = (UniqueConstraint("active_key", name="uq_facility_result"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    establishment_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
+    code: Mapped[str] = mapped_column(String(100))
+    active_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    work_id: Mapped[str | None] = mapped_column(ForeignKey("works.id"), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ProjectRevision(Base):
+    __tablename__ = "project_revisions"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project_plans.id"), index=True)
+    actor_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    lane: Mapped[str] = mapped_column(String(32))
+    old_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_version: Mapped[int] = mapped_column(Integer)
+    before: Mapped[dict] = mapped_column(JSON, default=dict)
+    after: Mapped[dict] = mapped_column(JSON, default=dict)
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class ProjectChange(Base):
+    __tablename__ = "project_changes"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project_plans.id"))
+    block_id: Mapped[str] = mapped_column(ForeignKey("project_blocks.id"))
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id"))
+    work_version: Mapped[int] = mapped_column(Integer)
+    requested_by: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    status: Mapped[str] = mapped_column(String(24), default="requested")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON)
+    approvals: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class ProjectRemark(Base):
+    __tablename__ = "project_remarks"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project_plans.id"), index=True)
+    work_id: Mapped[str | None] = mapped_column(ForeignKey("works.id"), nullable=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    severity: Mapped[str] = mapped_column(String(12))
+    text: Mapped[str] = mapped_column(Text)
+    due_at: Mapped[datetime | None] = mapped_column(UTC_DATETIME, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ProjectCampaign(Base):
+    __tablename__ = "project_campaigns"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("project_plans.id"), index=True)
+    title: Mapped[str] = mapped_column(String(250))
+    owner_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    next_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
+    until_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON)

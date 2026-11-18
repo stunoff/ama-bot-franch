@@ -15,7 +15,7 @@ SECTIONS = {
     "people": ("Сотрудники и роли", ["people", "accounts", "roles"]),
     "entities": ("ФП, предприятия и бренды", ["partner", "establishment", "brand", "links"]),
     "scenarios": ("Сценарии и чек-листы", ["policy:scenario", "policy:generic"]),
-    "sales": ("Продажи", ["policy:source", "policy:faq", "record:commercial", "record:consent"]),
+    "sales": ("Продажи", ["policy:source", "policy:faq", "policy:sales_content", "record:commercial", "record:consent"]),
     "training": ("Ознакомление ФП", ["record:course"]),
     "materials": ("Материалы и сообщения", ["record:material", "record:template"]),
     "calendars": ("Календари и сроки", ["record:calendar", "policy:sla"]),
@@ -65,6 +65,8 @@ def new_draft(db, actor, kind, data=None, target=None):
     else:
         access.require_staff(db, actor)
     initial = defaults(schema.fields_for(kind))
+    if kind == "record:policy:sales_content":
+        initial.setdefault("value", {})["public"] = True
     if kind == "account":
         initial["active"] = True
     initial.update(data or {})
@@ -112,7 +114,7 @@ def content_lines(db, kind, data, path=None):
         return [field_label(db, spec, obj)]
     fields = spec.get("fields", [])
     known = {f["key"] for f in fields}
-    fields = fields + [schema.infer(k, v) for k, v in obj.items() if k not in known and k not in {"command", "policy_type"}]
+    fields = fields + [schema.infer(k, v) for k, v in obj.items() if k not in known and k not in {"command", "policy_type", "knowledge_id", "knowledge_version"}]
     return [f"{f['label']}: {field_label(db, f, obj.get(f['key']))}" for f in fields if f["key"] != "command"]
 
 
@@ -136,7 +138,7 @@ def draft_screen(db, actor, s, p):
         value = value or {}
         fields = spec.get("fields", [])
         known = {f["key"] for f in fields}
-        fields = fields + [schema.infer(k, v) for k, v in value.items() if k not in known and k not in {"command", "policy_type", "commercial_version"}]
+        fields = fields + [schema.infer(k, v) for k, v in value.items() if k not in known and k not in {"command", "policy_type", "commercial_version", "knowledge_id", "knowledge_version"}]
         items, page = paginate(fields, page)
         for field in items:
             label = field["label"] + (" *" if field["required"] else "")
@@ -410,7 +412,8 @@ def dispatch(db, actor, s, action, p):
         result = business.preview(db, actor, d, publish=p.get("publish", False))
         d.status = "checked"
         d.before = {**d.before, "_checked": {"grants": access.grants_hash(db, actor),
-                    "recipients": result.get("recipients"), "audience_versions": result.get("audience_versions")}}
+                    "recipients": result.get("recipients"), "audience_versions": result.get("audience_versions"),
+                    "reply_contact":result.get("reply_contact"), "reply_epoch":result.get("reply_epoch"), "case_versions":result.get("case_versions")}}
         text = f"Предпросмотр: {d.title}\n" + "\n".join(content_lines(db, d.kind, d.data))
         differences = values.structural_diff({k: v for k, v in d.before.items() if not k.startswith("_")}, d.data)
         if differences:
@@ -429,6 +432,8 @@ def dispatch(db, actor, s, action, p):
             text += f"\nБрендовых чатов: {len(result['recipients'])}."
         if "works" in result:
             text += f"\nПунктов проекта: {len(result['works'])}."
+        if "contract_amount_minor" in result:
+            text += "\nДоговорный пакет: "+values.display(result["contract_amount_minor"],{"type":"money"})+". Подтверждённых интересов: "+str(len(result["case_versions"]))
         if "rows" in result:
             text += f"\nСтрок отчёта: {result['rows']}.\nПолучатель: {result['recipient']}"
         if d.target_id and d.kind.startswith("record:"):
@@ -469,6 +474,10 @@ def dispatch(db, actor, s, action, p):
         d = view_draft(db, actor, p["draft_id"])
         result = business.confirm(db, actor, d, p["expected"], publish=p.get("publish", False))
         actions = [B("В меню", "home"), B("Мои черновики", "drafts")]
+        if d.kind.startswith("case:"):
+            actions.insert(0, B("Открыть интерес", "sales_case", case_id=d.target_id))
+        if d.kind.startswith("expert:"):
+            actions.insert(0, B("Открыть консультацию", "expert", expert_id=d.target_id))
         if d.kind.startswith("work:") or d.kind == "create_work" or d.kind.startswith("operation:"):
             actions.insert(0, B("Открыть работу", "work", work_id=result["id"]))
         return show(db, actor, s, "Подтверждено: " + d.title + ("\nID: " + result["id"] if result.get("id") else "") + "\nУведомления переданы в очередь доставки.", actions)

@@ -41,7 +41,16 @@ def view_draft(db, actor, draft_id):
     d = db.scalar(select(UIDraft).where(UIDraft.id == draft_id).with_for_update())
     if not d or d.person_id != actor.person_id or d.binding_id != actor.binding_id or d.bot_id != settings().bot_id:
         raise AccessDenied("Черновик принадлежит другому человеку или чату.")
-    if business.configuration(d.kind) or d.kind == "export" and d.data.get("report") == "audit":
+    if d.kind.startswith(("case:", "expert:")):
+        from ama import sale_flow
+        from ama.models import SalesExpert
+        if d.kind.startswith("case:"):
+            sale_flow.authorize(db, actor, sale_flow.get(db, d.target_id))
+        else:
+            expert = db.get(SalesExpert, d.target_id)
+            if not expert or expert.owner_id != actor.person_id or expert.binding_id != actor.binding_id or not access.staff_role(db, actor, "chief_marketer"):
+                raise AccessDenied("Внутренняя консультация недоступна.")
+    elif business.configuration(d.kind) or d.kind == "export" and d.data.get("report") == "audit":
         from ama.admin import check_admin
         check_admin(db, actor)
     elif d.kind.startswith(("work:", "operation:")):

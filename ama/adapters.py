@@ -62,7 +62,7 @@ def normalize(platform, raw):
                               "filename": a.get("filename", "photo.jpg" if a["type"] == "image" else "document"),
                               "album_id": None})
         return Incoming(key=f"max:{event_id}", platform=platform, user_id=str(user["user_id"]),
-                        chat_id=str(chat_id), topic="", text=body.get("text", ""), callback=(cb or {}).get("payload"),
+                        chat_id=str(chat_id), topic="", text=("/start " + str(raw.get("payload") or "")) if raw.get("update_type") == "bot_started" else body.get("text", ""), callback=(cb or {}).get("payload"),
                         callback_id=(cb or {}).get("callback_id"), private=recipient.get("chat_type") == "dialog" or raw.get("update_type") == "bot_started", files=files)
     raise BusinessError("Неизвестный мессенджер.")
 
@@ -139,6 +139,20 @@ class Transport:
             raise BusinessError("Лимит мессенджера; сообщение будет повторено с задержкой.")
         if response.status_code >= 400:
             raise BusinessError(f"Мессенджер отклонил запрос, HTTP {response.status_code}.")
+
+    def create_topic(self, platform, chat_id, name):
+        if platform != "telegram":
+            raise BusinessError("Темы форума доступны только в Telegram.")
+        try:
+            response = self.client.post(f"https://api.telegram.org/bot{self.cfg.telegram_token}/createForumTopic",
+                                       json={"chat_id": chat_id, "name": name[:120]})
+            self._check(response)
+            data = response.json()
+            if not data.get("ok"):
+                raise BusinessError("Telegram отклонил создание темы.")
+            return str(data["result"]["message_thread_id"])
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as error:
+            raise DeliveryUncertain("Исход создания темы неизвестен; выполните сверку без автоматического повтора.") from error
 
     def answer_callback(self, platform, callback_id):
         if not callback_id:

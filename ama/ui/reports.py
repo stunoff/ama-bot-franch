@@ -41,7 +41,10 @@ def rows(db, actor, data):
                  if a.action.startswith(("CONFIG_", "UI_", "BOOTSTRAP_"))]
     else:
         access.require_staff(db, actor)
-        if report in {"works", "summary"}:
+        if report in {"sales_events", "sales_funnel", "sales_cohort"}:
+            from ama.sales_reports import build
+            columns, items = build(db, actor, data, start, end)
+        elif report in {"works", "summary"}:
             work = [w for w in access.works(db, actor) if in_scope(data, w) and start <= w.created_at < end]
             if report == "works":
                 from ama.service import STATUSES
@@ -84,7 +87,7 @@ def rows(db, actor, data):
             deals = list(db.scalars(select(Deal)))
             visible_ids = {lead.id for lead in visible if not data.get("brand_id") or lead.data.get("brand_id") == data["brand_id"]}
             cohort_ids = {lead.id for lead in cohort}
-            won = sum(bool(d.successful_at) and d.lead_id in cohort_ids for d in deals)
+            won = len({d.lead_id for d in deals if d.successful_at and d.lead_id in cohort_ids})
             period_wins = sum(bool(d.successful_at) and start <= d.successful_at < end and d.lead_id in visible_ids for d in deals)
             columns = ["Показатель", "Значение"]
             items = [["Лидов когорты", len(cohort)], ["Успехов когорты", won], ["Конверсия когорты", won/len(cohort) if cohort else 0], ["Успехов за период, все когорты", period_wins]]

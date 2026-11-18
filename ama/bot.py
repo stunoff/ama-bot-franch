@@ -130,6 +130,9 @@ def handle(db, platform, raw):
     try:
         actor = identify(db, event.platform, event.user_id, event.chat_id, event.topic)
     except AccessDenied:
+        if event.private:
+            from ama.prospects import handle as handle_prospect
+            return handle_prospect(db, event)
         account = db.scalar(select(Account).where(Account.platform == event.platform, Account.external_id == event.user_id, Account.active.is_(True)))
         if event.private and account and not event.callback:
             return handle_lead_message(db, event, account)

@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://ama:ama@mysql/ama?charset=utf8mb4"
     bot_id: str = "ama-franchising"
     telegram_token: str = ""
+    telegram_bot_username: str = ""
+    max_bot_username: str = ""
+    landing_requests_per_minute: int = 120
     telegram_webhook_secret: str = ""
     max_token: str = ""
     max_webhook_secret: str = ""

@@ -115,6 +115,15 @@ def can_deal(db, actor, deal):
     lead = db.get(Lead, deal.lead_id)
     if not lead:
         return False
+    if deal.case_id:
+        from ama.models import SalesCase
+        ids=deal.data.get("case_ids") or [deal.case_id]
+        cases=list(db.scalars(select(SalesCase).where(SalesCase.id.in_(ids))))
+        if len(cases)!=len(set(ids)):
+            return False
+        if all(scope(db,actor,SimpleNamespace(partner_id=None,brand_id=c.brand_id,establishment_id=None),{"contract"}) for c in cases):
+            return True
+        return deal.curator_id==actor.person_id and all(scope(db,actor,SimpleNamespace(partner_id=deal.data.get("partner_id"),brand_id=c.brand_id,establishment_id=None),{"curator","support_head"}) for c in cases)
     if can_lead(db, actor, lead, for_contract=True):
         return True
     obj = SimpleNamespace(partner_id=deal.data.get("partner_id"), brand_id=deal.data.get("brand_id"), establishment_id=None)

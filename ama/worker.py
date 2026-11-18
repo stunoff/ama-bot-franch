@@ -112,18 +112,54 @@ def outbox_step(transport):
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
+            if row.payload.get("public_record"):
+                from ama.models import Record
+                from ama.prospects import approved, brand
+                material=db.get(Record,row.payload["public_record"])
+                if not material or not approved(material) or not material.data.get("public",True) or not brand(db,material.data.get("brand_id")) or material.version!=row.payload.get("public_record_version"):
+                    row.status,row.error="cancelled","Public material changed before delivery"
+                    return True
+            if row.payload.get("template_id"):
+                from ama.models import Record
+                template=db.get(Record,row.payload["template_id"])
+                if not template or not template.published or template.version!=row.payload.get("template_version"):
+                    row.status,row.error="cancelled","Reminder template changed before delivery"
+                    return True
             if row.payload.get("ui_actor"):
                 from ama.auth import Actor
                 from ama.ui.access import grants_hash
                 if not b or grants_hash(db, Actor(row.payload["ui_actor"], b.id)) != row.payload.get("ui_grants"):
                     raise BusinessError("Права пользователя изменились. Откройте меню или сформируйте отчёт заново.")
+            if row.payload.get("sales_actor"):
+                from ama.auth import Actor
+                from ama.ui.access import grants_hash
+                from ama.models import SalesCase
+                case = db.get(SalesCase,row.payload["case_id"])
+                if not case or case.owner_id != row.payload["sales_actor"] or grants_hash(db,Actor(row.payload["sales_actor"],row.payload["sales_actor_binding"])) != row.payload["sales_grants"]:
+                    raise BusinessError("Ответственный или его права изменились. Подготовьте ответ заново.")
             if row.payload.get("lead_id"):
                 from ama.models import Lead
-                lead = db.get(Lead, row.payload["lead_id"])
-                if (not lead or lead.no_contact or (row.payload.get("lead_touch_id") and
-                    (row.payload.get("silence_epoch") != lead.data.get("silence", {}).get("epoch") or
-                     lead.stage == "contract" or lead.result == "success" or lead.data.get("next_contact")))):
+                lead = db.scalar(select(Lead).where(Lead.id==row.payload["lead_id"]).with_for_update())
+                if row.payload.get("sales_reply") and lead and lead.data.get("contact") != row.payload.get("recipient_contact"):
+                    raise BusinessError("Подтверждённый канал лида изменился. Проверьте адресата заново.")
+                if (not lead or (lead.no_contact and not (row.payload.get("reply_to_inbound") and
+                        row.payload.get("silence_epoch") == lead.data.get("silence", {}).get("epoch"))) or
+                    (row.payload.get("lead_touch_id") and not reminders.deliverable(db, lead, row.payload))):
                     row.status, row.error = "cancelled", "Lead opted out"
+                    return True
+            if row.payload.get("sales_reply") and lead and row.payload.get("silence_epoch") != lead.data.get("silence",{}).get("epoch"):
+                row.status,row.error="blocked","Client reacted after reply preview; review context"
+                return True
+            if row.payload.get("lead_touch_id"):
+                if reminders.message_count(db,lead,["sent","sending","uncertain"]) >= 2:
+                    row.status,row.error="cancelled","Two reminder slots already delivered or reserved"
+                    return True
+                cal = reminders.configured_calendar(db)
+                if not cal:
+                    raise BusinessError("Нет действующего календаря продаж.")
+                allowed_at = cal.add_minutes(now(), 0)
+                if allowed_at > now():
+                    row.retry_at = allowed_at
                     return True
             if row.payload.get("partner_window"):
                 next_time = next_partner_window(db, b, now())
@@ -150,7 +186,9 @@ def outbox_step(transport):
             return True
     # Лок на строке отпущен, но sending не подбирается другими воркерами.
     try:
-        if payload.get("callback_id"):
+        if payload.get("op") == "create_topic":
+            external_id = transport.create_topic(platform, chat_id, payload["topic_name"])
+        elif payload.get("callback_id"):
             transport.answer_callback(platform, payload["callback_id"])
             external_id = None
         else:
@@ -173,6 +211,12 @@ def outbox_step(transport):
         row.retry_at = now() + timedelta(seconds=min(3600, 5 * 2 ** min(row.attempts, 9)))
         if row.status == "pending" and row.attempts >= 12:
             row.status = "failed"
+        if status == "sent" and payload.get("op") == "create_topic":
+            from ama.sale_flow import on_topic
+            try:
+                on_topic(db, row, external_id)
+            except BusinessError as topic_error:
+                row.status, row.error = "uncertain", str(topic_error)
         if status == "sent":
             reminders.on_delivered(db, row)
         if status == "sent" and payload.get("probe"):
@@ -217,13 +261,19 @@ def substitution_step():
         return process(db)
 
 
+def sales_step():
+    from ama.sale_flow import tick
+    with Session.begin() as db:
+        return tick(db)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     transport = Transport()
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), outbox_step(transport)]
+                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), outbox_step(transport)]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

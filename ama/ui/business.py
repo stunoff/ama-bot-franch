@@ -24,6 +24,21 @@ def authorize(db, actor, draft):
         raise AccessDenied("Черновик принадлежит другому пользователю, боту или чату.")
     if draft.status not in {"draft", "checked", "saved"}:
         raise BusinessError("Черновик уже применён или отменён. Откройте актуальную запись.")
+    if draft.kind.startswith(("case:", "expert:")):
+        from ama import sale_flow
+        from ama.models import SalesExpert
+        if draft.kind.startswith("case:"):
+            obj = sale_flow.get(db, draft.target_id)
+            sale_flow.authorize(db, actor, obj)
+        else:
+            obj = db.get(SalesExpert, draft.target_id)
+            if not obj or obj.owner_id != actor.person_id or obj.binding_id != actor.binding_id:
+                raise AccessDenied("Нет доступа к внутренней консультации.")
+            case = sale_flow.get(db, obj.case_id)
+            if not access.scope(db, actor, SimpleNamespace(partner_id=None, brand_id=case.brand_id, establishment_id=None), {"chief_marketer"}):
+                raise AccessDenied("Нет назначения Главного маркетолога.")
+        versioned(obj, draft.target_version)
+        return
     if configuration(draft.kind):
         admin.check_admin(db, actor)
         return
@@ -106,6 +121,12 @@ def from_object(db, actor, obj):
 def execute(db, actor, draft, *, publish=False):
     authorize(db, actor, draft)
     kind, d = draft.kind, deepcopy(draft.data)
+    if kind.startswith("case:"):
+        from ama.sale_flow import action
+        return action(db, actor, draft.target_id, draft.target_version, kind.split(":")[1], d, "ui:"+draft.id)
+    if kind.startswith("expert:"):
+        from ama.sale_flow import expert_action
+        return expert_action(db, actor, draft.target_id, draft.target_version, kind.split(":")[1], d)
     if kind.startswith("config:"):
         command = d["command"]
         models = {"probe_binding": Binding, "activate_binding": Binding, "replace_binding": Binding,
@@ -233,6 +254,16 @@ def confirm(db, actor, draft, expected, *, publish=False):
     errors = required_errors(schema.fields_for(draft.kind), draft.data)
     if errors:
         raise BusinessError("Заполните обязательные поля: " + "; ".join(errors[:10]))
+    if draft.kind == "case:contract":
+        from ama.sale_flow import get
+        for case_id, expected_version in (checked.get("case_versions") or {}).items():
+            versioned(get(db,case_id,True),expected_version)
+    if draft.kind == "case:reply":
+        from ama.sale_flow import get
+        case = get(db,draft.target_id)
+        lead = db.get(Lead,case.lead_id)
+        if lead.data.get("contact") != checked.get("reply_contact") or lead.data.get("silence",{}).get("epoch") != checked.get("reply_epoch"):
+            raise Conflict("Лид ответил или изменился подтверждённый канал. Проверьте адресата и текст заново.")
     if draft.kind == "broadcast":
         current = preview(db, actor, draft)
         if current["audience_versions"] != checked.get("audience_versions") or current["recipients"] != checked.get("recipients"):

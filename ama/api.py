@@ -8,7 +8,7 @@ from ama.db import Session
 from ama.models import Inbox
 from ama.adapters import normalize
 
-app = FastAPI(title="АМА Франчайзинг", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="АМА Франчайзинг", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.get("/health")
@@ -54,3 +54,18 @@ async def telegram(request: Request):
 @app.post("/webhooks/max")
 async def max_hook(request: Request):
     return await ingest("max", request, settings().max_webhook_secret, "x-max-bot-api-secret")
+
+
+@app.get("/landing/{source_key}")
+def landing(source_key: str, request: Request, platform: str = "telegram"):
+    from fastapi.responses import RedirectResponse
+    from ama.prospects import landing_ticket
+    from ama.errors import BusinessError
+    if len(source_key) > 100 or len(request.url.query) > 2048:
+        raise HTTPException(400, "Parameters too long")
+    try:
+        with Session.begin() as db:
+            url = landing_ticket(db, source_key, platform, dict(request.query_params))
+        return RedirectResponse(url, status_code=302, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+    except BusinessError as error:
+        raise HTTPException(429 if "Слишком много" in str(error) else 503, str(error))

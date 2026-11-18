@@ -14,7 +14,7 @@ ADMIN_CATALOGS = {
         "calendar": "Рабочие календари", "material": "Материалы и ссылки", "course": "Ознакомление ФП", "route": "Маршруты работ",
         "commercial": "Коммерческие условия", "consent": "Согласия", "template": "Тексты сообщений", "policy": "Сценарии и правила"}.items()},
 }
-POLICY_LABELS = {"scenario": "Сценарии и чек-листы", "source": "Источники продаж", "faq": "База ответов консультанта",
+POLICY_LABELS = {"sales_content": "Карточки и материалы продаж", "scenario": "Сценарии и чек-листы", "source": "Источники продаж", "faq": "База ответов консультанта",
                  "sla": "Сроки и эскалации", "payment": "Платные работы и реквизиты", "schedule": "Расписания и отчёты", "generic": "Прочие правила"}
 
 
@@ -88,6 +88,10 @@ def scope_for_draft(db, draft):
         w = db.get(Work, draft.target_id)
         if w:
             return w
+    if draft.target_id and draft.kind.startswith("case:"):
+        from ama.sale_flow import get
+        target = get(db, draft.target_id)
+        return SimpleNamespace(partner_id=None, brand_id=target.brand_id, establishment_id=None)
     if draft.target_id and draft.kind.startswith(("sales:", "contract:", "deal:")):
         from ama.models import Lead, Deal
         target = db.get(Deal if draft.kind.startswith("deal:") else Lead, draft.target_id)
@@ -142,6 +146,15 @@ def refs(db, actor, source, draft=None, search=""):
                 if not any(role.name in r.data.get("audience", []) and access.matches(role, context) for role in access.assignments(db, actor)):
                     continue
             rows.append((r.key, label(db, r)))
+    elif source == "sales_expert" and draft and draft.kind.startswith("case:"):
+        from ama.models import SalesExpert
+        rows = [(e.id, e.question[:90]) for e in db.scalars(select(SalesExpert).where(SalesExpert.case_id==draft.target_id, SalesExpert.state=="answered")) if e.data.get("approved_exception")]
+    elif source == "sales_case" and draft and draft.kind.startswith("case:"):
+        from ama.models import SalesCase
+        from ama.sale_flow import get, can_case
+        current = get(db, draft.target_id)
+        rows = [(c.id, c.data.get("name", "Интерес")+" · "+entity_name(db,c.brand_id)) for c in db.scalars(select(SalesCase).where(SalesCase.lead_id==current.lead_id,SalesCase.id!=current.id))
+                if c.result not in {"success","refused","not_target"} and can_case(db,actor,c) and c.owner_id==actor.person_id]
     elif source == "work":
         query = select(Work).order_by(Work.due_at, Work.id)
         if draft and draft.kind == "substitution":
@@ -161,6 +174,12 @@ def reference_label(db, source, value):
         return "не выбрано"
     if source.startswith("record:"):
         r = db.scalar(select(Record).where(Record.kind == source.split(":")[1], Record.key == value))
+    elif source == "sales_expert":
+        from ama.models import SalesExpert
+        r = db.get(SalesExpert, value)
+    elif source == "sales_case":
+        from ama.models import SalesCase
+        r = db.get(SalesCase, value)
     else:
         model = {"person": Identity, "partner_person": Identity, "binding": Binding, "client_binding": Binding,
                  "work": Work, "partner": Entity, "brand": Entity, "establishment": Entity}.get(source)

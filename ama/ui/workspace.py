@@ -16,7 +16,7 @@ OPERATIONS = {"offer": "Предложение платной услуги", "in
               "opening_confirm": "Подтвердить допуск к открытию"}
 LEAD_ACTIONS = {"take": "Взять лида", "qualify": "Квалификация", "stage": "Изменить этап", "wait_lead": "Ожидаем лида",
                 "not_now": "Не сейчас", "no_answer": "Недозвон", "refuse": "Зафиксировать отказ", "reopen": "Возобновить с согласием", "reply": "Ответить лиду"}
-DEAL_ACTIONS = {"package": "Новая редакция документов", "signed": "Подтвердить подписи", "payment": "Подтвердить оплату",
+DEAL_ACTIONS = {"sent": "Обязательный комплект отправлен", "curator_clarify": "Запросить уточнение по передаче", "package": "Новая редакция документов", "signed": "Подтвердить подписи", "payment": "Подтвердить оплату",
                 "confirm": "Проверить условия успеха", "assign_curator": "Назначить куратора", "curator_accept": "Принять ФП в сопровождение"}
 FILTERS = {"active": "Открытые работы", "mine": "Моя очередь", "review": "На моей приёмке", "overdue": "Просроченные", "waiting": "Ожидания", "done": "Завершённые", "all": "Все работы", "blockers": "Блокеры", "requests": "Запросы ФП"}
 
@@ -98,6 +98,9 @@ def begin_action(db, actor, s, kind, target, data=None):
 
 def dispatch(db, actor, s, action, p):
     access.require_staff(db, actor)
+    if action == "leads" or action.startswith("sales_") or action in {"experts", "expert", "expert_action"}:
+        from ama.ui.sales import dispatch as sales_ui
+        return sales_ui(db, actor, s, action, p)
     if action in {"home", "workspace"}:
         rows = access.works(db, actor)
         active = [w for w in rows if w.status != "done"]
@@ -112,6 +115,8 @@ def dispatch(db, actor, s, action, p):
         if granted & {"curator", "support_head", "marketing_manager"}:
             actions += [B("Предприятия", "enterprises"), B("Франчайзи-партнёры", "partners"), B("Создать работу…", "new", kind="create_work"), B("Состав проекта…", "new", kind="project"),
                         B("Мои проекты", "projects"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Информационная публикация…", "new", kind="broadcast")]
+        if "chief_marketer" in granted:
+            actions.append(B("Внутренние консультации", "experts"))
         if "consultant" in granted:
             actions.append(B("Очередь продаж", "leads"))
         if granted & {"contract", "curator", "support_head"}:
@@ -330,7 +335,7 @@ def dispatch(db, actor, s, action, p):
         paid = db.scalar(select(func.coalesce(func.sum(Payment.amount_minor), 0)).where(Payment.deal_id == d.id))
         text = f"{repo.label(db, d)}\nID: {d.id} · версия {d.version}\nРедакция документов: {d.package_version}\nПодписана редакция: {d.signed_package_version or 'нет'}\nПодтверждено оплат: {paid/100:.2f} ₽\nУсловие расчёта: {d.required_minor/100:.2f} ₽\nКуратор: {repo.name(db, d.curator_id)}"
         lead = db.get(Lead, d.lead_id)
-        keys = ["package", "signed", "payment", "confirm", "assign_curator"] if access.can_lead(db, actor, lead, for_contract=True) else ["curator_accept"] if not d.handoff_accepted_at else []
+        keys = ["package", "sent", "signed", "payment", "confirm", "assign_curator"] if access.can_lead(db, actor, lead, for_contract=True) else ["curator_accept", "curator_clarify"] if not d.handoff_accepted_at else []
         actions = [B(DEAL_ACTIONS[a]+"…", "deal_action", deal_id=d.id, expected=d.version, action=a) for a in keys]
         return show(db, actor, s, text, actions+[B("← Сделки", "deals"), B("В меню", "home")], "deal", deal_id=d.id)
     raise BusinessError("Экран недоступен. Откройте /start.")

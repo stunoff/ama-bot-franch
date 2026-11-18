@@ -260,7 +260,8 @@ class Interest(Base):
 class Deal(Base):
     __tablename__ = "deals"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
-    lead_id: Mapped[str] = mapped_column(ForeignKey("leads.id"), unique=True)
+    lead_id: Mapped[str] = mapped_column(ForeignKey("leads.id"), index=True)
+    case_id: Mapped[str | None] = mapped_column(ForeignKey("sales_cases.id"), nullable=True, unique=True)
     package_version: Mapped[int] = mapped_column(Integer, default=1)
     signed_package_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     required_minor: Mapped[int] = mapped_column(Integer)
@@ -306,6 +307,7 @@ class Dialog(Base):
 
 class LeadTouch(Base):
     __tablename__ = "lead_touches"
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     __table_args__ = (UniqueConstraint("lead_id", "epoch", "ordinal", name="uq_lead_silence_touch"),)
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     lead_id: Mapped[str] = mapped_column(ForeignKey("leads.id"))
@@ -382,3 +384,92 @@ class UIExport(Base):
     storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
     expires_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+
+
+class SalesCase(Base):
+    """One confirmed buying interest; a person can have several without losing prior success."""
+    __tablename__ = "sales_cases"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    lead_id: Mapped[str] = mapped_column(ForeignKey("leads.id"), index=True)
+    brand_id: Mapped[str | None] = mapped_column(ForeignKey("entities.id"), nullable=True)
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("sales_cases.id"), nullable=True)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
+    binding_id: Mapped[str | None] = mapped_column(ForeignKey("chat_bindings.id"), nullable=True)
+    stage: Mapped[str] = mapped_column(String(40), default="new")
+    state: Mapped[str] = mapped_column(String(40), default="active")
+    result: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ProspectSession(Base):
+    __tablename__ = "prospect_sessions"
+    __table_args__ = (UniqueConstraint("bot_id", "person_id", "platform", "chat_id", name="uq_prospect_session"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    platform: Mapped[str] = mapped_column(String(16))
+    chat_id: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    case_id: Mapped[str | None] = mapped_column(ForeignKey("sales_cases.id"), nullable=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class LandingTicket(Base):
+    __tablename__ = "landing_tickets"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    source_key: Mapped[str] = mapped_column(String(100))
+    platform: Mapped[str] = mapped_column(String(16))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    person_id: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    expires_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+
+
+class SalesEvent(Base):
+    __tablename__ = "sales_events"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    event_key: Mapped[str] = mapped_column(String(180), unique=True)
+    lead_id: Mapped[str] = mapped_column(ForeignKey("leads.id"), index=True)
+    case_id: Mapped[str | None] = mapped_column(ForeignKey("sales_cases.id"), nullable=True)
+    actor_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class SalesControl(Base):
+    __tablename__ = "sales_controls"
+    retry_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now, index=True)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    case_id: Mapped[str] = mapped_column(ForeignKey("sales_cases.id"))
+    event_key: Mapped[str] = mapped_column(String(180), unique=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    due_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SalesExpert(Base):
+    __tablename__ = "sales_experts"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    case_id: Mapped[str] = mapped_column(ForeignKey("sales_cases.id"), index=True)
+    requester_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    owner_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    category: Mapped[str] = mapped_column(String(40))
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String(20), default="new")
+    due_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class DealInterest(Base):
+    __tablename__ = "deal_interests"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    deal_id: Mapped[str] = mapped_column(ForeignKey("deals.id"), index=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("sales_cases.id"), unique=True)

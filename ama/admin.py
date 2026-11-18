@@ -215,9 +215,16 @@ def apply(db, actor, command, *, bootstrap=False):
     if kind == "binding" and data["platform"] == "max" and data.get("topic_key"):
         raise BusinessError("В MAX используются логические карточки, а не Telegram topic_id.")
     if kind == "record":
+        if data["kind"] == "consent" and len(data["key"]) > 64:
+            raise BusinessError("Ключ согласия должен содержать не больше 64 символов.")
         if data.get("owner_id"):
             get_person(db, data["owner_id"])
         validate_record(db, data["kind"], data["value"], published=data.get("published", False))
+        if data["kind"]=="policy" and data["value"].get("policy_type")=="source" and data.get("published"):
+            source_id=data["value"].get("source_id",data["key"])
+            for other in db.scalars(select(Record).where(Record.kind=="policy",Record.key!=data["key"],Record.published.is_(True))):
+                if other.data.get("policy_type")=="source" and ({source_id,data["key"]} & {other.key,other.data.get("source_id")}):
+                    raise BusinessError("Идентификатор источника уже используется другим лендингом.")
     if kind == "account":
         if db.scalar(select(Account).where(Account.platform == data["platform"], Account.external_id == str(data["external_id"]))):
             raise BusinessError("Этот аккаунт уже привязан. Откройте существующего человека; другой человек не наследует его историю.")

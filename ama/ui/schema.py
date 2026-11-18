@@ -76,7 +76,7 @@ RECORD_VALUES = {
     "course": [f("title", "Название курса"), f("cards", "Карточки ознакомления", "list", True, fields=CARD),
                f("substantial_update", "Существенное обновление", "bool"), f("required_update_reason", "Причина обязательного обновления")],
     "route": [ref("binding_id", "Рабочий чат", "binding", True), ref("owner_id", "Следующий ответственный", "person", True),
-              ref("reviewer_id", "Принимающий", "person", True), ref("calendar", "Календарь", "record:calendar", True), *SCOPE],
+              ref("reviewer_id", "Принимающий", "person", True), ref("calendar", "Календарь", "record:calendar", True), ref("queue_manager_id", "Ответственный за очередь", "person"), *SCOPE],
     "commercial": [ref("brand_id", "Бренд", "brand", True), f("required_minor", "Условие расчёта, ₽", "money", True, minimum=0),
                    f("terms", "Утверждённые коммерческие условия", required=True), f("approved_on", "Дата утверждения", "date", True),
                    f("valid_until", "Действует до", "date"), f("approval", "Подтверждение владельца / ссылка на решение", required=True)],
@@ -94,7 +94,7 @@ POLICIES = {
             choice("counter", "Счёт времени", {"working": "Рабочее", "calendar": "Календарное"}, True),
             f("reminders", "Интервалы напоминаний, минуты", "integers"), f("approval", "Подтверждение владельца процесса", required=True)],
     "source": [f("title", "Название источника", required=True), f("source_id", "Идентификатор источника", "key", True),
-               ref("brand_id", "Бренд", "brand"), f("tags", "Разрешённые метки", "lines"), f("welcome", "Приветствие")],
+               ref("brand_id", "Бренд", "brand"), f("telegram_bot_username", "Публичное имя Telegram-бота"), f("max_bot_username", "Публичное имя MAX-бота"), f("tags", "Разрешённые метки", "lines"), f("welcome", "Приветствие")],
     "faq": [f("title", "Тема", required=True), f("question", "Вопрос", required=True), f("answer", "Утверждённый ответ", required=True),
             ref("brand_id", "Бренд", "brand"), f("approved_on", "Дата утверждения", "date", True), f("approval", "Подтверждение владельца", required=True)],
     "payment": [f("title", "Утверждённый получатель", required=True), f("reference", "Ссылка на защищённые реквизиты", "url", True),
@@ -104,6 +104,13 @@ POLICIES = {
                  ref("calendar", "Календарь", "record:calendar", True), ref("binding_id", "Получатель", "binding", True),
                  f("start_on", "Начало периода", "date", True), f("frequency", "Периодичность", required=True),
                  f("approval", "Подтверждение владельца процесса", required=True)],
+    "sales_content": [f("title", "Название карточки", required=True), ref("brand_id", "Бренд", "brand", True),
+        choice("category", "Раздел", {"about":"О проекте", "advantages":"Преимущества", "formats":"Форматы", "finance":"Экономика", "benefits":"Что получает партнёр", "launch":"Запуск", "menu":"Меню", "marketing":"Маркетинг", "systems":"Системы", "support":"Поддержка", "premises":"Помещение", "media":"Медиа"}, True),
+        f("text", "Утверждённый текст", required=True, maximum=3500), f("public", "Разрешено показывать лиду", "bool"),
+        f("links", "Материалы", "list", fields=[f("title","Название",required=True),f("url","HTTPS-ссылка","url",True)]),
+        choice("finance_basis", "Тип финансовых сведений", {"terms":"Условия франшизы", "model":"Модель конкретного формата"}),
+        f("format", "Формат финансовой модели"), f("assumptions", "Допущения расчёта"), f("approved_on","Дата утверждения","date",True),
+        f("approval","Основание владельца содержимого",required=True), f("valid_until","Действует до","date")],
     "generic": [f("title", "Название", required=True), f("description", "Описание"), f("settings", "Параметры", "object", fields=[])],
 }
 
@@ -113,6 +120,42 @@ def fields_for(kind):
         return [choice("outcome", "Проверенный исход", {"delivered": "Сообщение уже доставлено", "not_delivered": "Доставка точно не состоялась"}, True),
                 f("external_id", "ID доставленного сообщения"), f("evidence", "Как проверен фактический исход", required=True),
                 f("worker_stopped", "Все воркеры остановлены перед сверкой зависшей sending", "bool"), REASON]
+    if kind.startswith("expert:"):
+        return [f("answer", "Внутренний ответ консультанту", required=True, maximum=12000), f("approved_exception", "Явно согласовать индивидуальные условия по вопросу категории «Условия»", "bool")] if kind.endswith("answer") else []
+    if kind.startswith("case:"):
+        action = kind.split(":")[1]
+        if action == "contract":
+            return [f("additional_case_ids", "Дополнительные подтверждённые интересы того же человека", "multiref", source="sales_case")]
+        if action == "qualify":
+            return [f("name", "Имя", required=True), f("city", "Город", required=True), f("phone", "Телефон"),
+                f("location", "Локация / адрес / карта"), f("premises", "Помещение"), f("business", "Действующий бизнес"),
+                f("start_period", "Срок запуска"), f("experience", "Опыт"), ref("commercial_key", "Текущая коммерческая редакция", "record:commercial"),
+                f("economics_acknowledged", "Лид ознакомлен с экономикой", "bool"), f("intent_confirmed", "Лид подтвердил намерение заключить договор", "bool"),
+                f("requisites", "Реквизиты / защищённая ссылка"), f("request_requisites", "Запросить реквизиты при оформлении", "bool"),
+                f("exceptions", "Индивидуальные договорённости"), ref("exception_reference", "Подтверждение Главного маркетолога", "sales_expert")]
+        if action in {"contact", "call_schedule", "wait_lead", "not_now"}:
+            return [f("next_contact", "Следующая дата контакта", "datetime", True), f("next_action", "Следующий шаг", required=True), f("reason", "Причина / договорённость", required=True)]
+        if action == "call":
+            return [choice("result", "Фактический результат звонка", {"connected":"Связались", "no_answer":"Не дозвонились", "call_later":"Перезвонить позже", "next_stage":"Готов к следующему этапу"}, True),
+                f("comment", "Результат и следующий шаг", required=True), f("next_contact", "Следующий контакт (по договорённости)", "datetime"), f("next_action", "Следующее действие")]
+        if action == "expert":
+            return [choice("category", "Категория вопроса", {"question":"Вопрос", "location":"Аналитика города / локации", "economics":"Экономика", "terms":"Индивидуальные условия", "menu":"Меню", "premises":"Помещение"}, True),
+                f("question", "Вопрос Главному маркетологу", required=True), f("due_at", "Контрольная дата", "datetime", True)]
+        if action == "assign_brand":
+            return [ref("brand_id", "Подтверждённый проект", "brand", True), f("evidence", "Как лид подтвердил выбор", required=True)]
+        if action == "financial_review":
+            return [f("evidence", "Дата / содержание состоявшегося финансового разбора", required=True)]
+        if action == "reassign":
+            return [ref("person_id", "Новый консультант", "person", True), REASON]
+        if action == "note":
+            return [f("text", "Внутренняя заметка", required=True)]
+        if action == "reply":
+            return [f("text", "Клиентский ответ", required=True, maximum=3500), choice("touch_reason", "Ожидание после ответа", {"consultant_reply":"Ответ консультанта", "clarification":"Уточняющий вопрос", "materials":"Запрошенные материалы"}, True)]
+        if action == "not_target":
+            return [f("reason", "Причина нецелевого интереса", required=True)]
+        if action == "stage":
+            return [choice("stage", "Этап", {"selection":"S0 · Подбор проекта", "presentation":"S1 · Знакомство", "financial_review":"S2 · Начато обсуждение экономики", "terms":"S3 · Согласование условий"}, True), REASON]
+        return fields_for("sales:"+action) if action in {"refuse", "reopen"} else []
     if kind.startswith("config:"):
         return ([ref("new_id", "Новый проверенный чат", "binding", True)] if kind == "config:replace_binding" else []) + [REASON]
     if kind.startswith("record:"):
@@ -160,7 +203,7 @@ def fields_for(kind):
     if kind == "broadcast":
         return [f("text", "Текст публикации", required=True, maximum=3500), ref("brand_id", "Бренд (пусто — общая информация)", "brand")]
     if kind == "export":
-        return [choice("report", "Вид отчёта", {"works": "Работы и сроки", "summary": "Сводка сопровождения", "training": "Ознакомление ФП", "sales": "Когортная аналитика продаж", "audit": "Журнал настроек"}, True),
+        return [choice("report", "Вид отчёта", {"works": "Работы и сроки", "summary": "Сводка сопровождения", "training": "Ознакомление ФП", "sales": "Совместимый отчёт продаж 0.2", "sales_events": "Продажи: события периода", "sales_funnel": "Продажи: текущая воронка", "sales_cohort": "Продажи: когорта первой передачи", "audit": "Журнал настроек"}, True),
                 f("start", "Начало периода", "date", True), f("end", "Конец периода (включительно)", "date", True),
                 ref("partner_id", "ФП", "partner"), ref("establishment_id", "Предприятие", "establishment"), ref("brand_id", "Бренд", "brand")]
     if kind == "substitution":
@@ -194,7 +237,9 @@ def fields_for(kind):
                 "reply": [f("text", "Текст ответа клиенту", required=True, maximum=3500)]}.get(action, [])
     if kind.startswith("deal:"):
         action = kind.split(":")[1]
-        return {"package": [f("document_reference", "Ссылка на редакцию комплекта", required=True)],
+        return {"sent": [f("evidence", "Подтверждение отправки текущего обязательного комплекта", required=True)],
+                "curator_clarify": [f("question", "Что нужно уточнить консультанту", required=True)],
+                "package": [f("document_reference", "Ссылка на редакцию комплекта", required=True)],
                 "signed": [f("evidence", "Подтверждение подписей текущей редакции", required=True)],
                 "payment": [f("amount_minor", "Подтверждённая сумма, ₽", "money", True, minimum=1), f("bank_reference", "Уникальная банковская операция", required=True)],
                 "assign_curator": [ref("curator_id", "Куратор", "person", True), ref("partner_id", "ФП", "partner", True)]}.get(action, [])

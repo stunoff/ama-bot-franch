@@ -126,6 +126,18 @@ def validate_record(db, kind, value, *, published=False):
             parsed = urlsplit(value[field])
             if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
                 raise BusinessError("Используйте HTTPS-ссылку без логина, пароля и секретов доступа.")
+    if kind == "policy" and value.get("policy_type") == "sales_content":
+        validate_scope(db, value)
+        if published and not all(value.get(k) for k in ("title", "text", "brand_id", "approval", "approved_on")):
+            raise BusinessError("Карточка продаж требует бренд, текст, владельца, дату и основание утверждения.")
+        if value.get("category") == "finance" and value.get("finance_basis") not in {"terms", "model"}:
+            raise BusinessError("Раздел экономики должен отделять условия франшизы от финансовой модели.")
+        if value.get("category") == "finance" and value.get("finance_basis") == "model" and not all(value.get(k) for k in ("format", "assumptions")):
+            raise BusinessError("Финансовая модель требует формат, дату и допущения расчёта.")
+        for link in value.get("links", []):
+            parsed = urlsplit(link.get("url", ""))
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                raise BusinessError("Материал требует безопасную HTTPS-ссылку.")
     if kind == "calendar":
         from ama.calendar import Calendar
         Calendar(value)
@@ -259,6 +271,9 @@ def extra(db, actor, kind, d):
             obj.status, obj.external_id, obj.error = "sent", d["external_id"], None
             from ama import reminders
             reminders.on_delivered(db, obj)
+            if obj.payload.get("op") == "create_topic":
+                from ama.sale_flow import on_topic
+                on_topic(db, obj, d["external_id"])
             if obj.payload.get("probe"):
                 b = db.get(Binding, obj.binding_id)
                 if b and b.version == obj.binding_version:

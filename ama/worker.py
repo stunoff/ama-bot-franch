@@ -19,7 +19,13 @@ log = logging.getLogger("ama.worker")
 
 def inbox_step():
     with Session.begin() as db:
-        item = db.scalar(select(Inbox).where(Inbox.status == "pending", Inbox.retry_at <= now()).order_by(Inbox.retry_at).with_for_update(skip_locked=True).limit(1))
+        item = db.scalar(
+            select(Inbox)
+            .where(Inbox.status == "pending", Inbox.retry_at <= now())
+            .order_by(Inbox.retry_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
         if not item:
             return False
         try:
@@ -39,7 +45,11 @@ def inbox_step():
             # SAVEPOINT откатывает все частичные действия до отправки ошибки.
             event = normalize(item.platform, item.payload)
             if event:
-                message = str(error) if isinstance(error, BusinessError) else "Некорректные параметры команды. Проверьте формат в /help."
+                message = (
+                    str(error)
+                    if isinstance(error, BusinessError)
+                    else "Некорректные параметры команды. Проверьте формат в /help."
+                )
                 bot.send(db, event, message, suffix="error")
             item.status, item.error = "rejected", type(error).__name__
         except Exception as error:
@@ -54,16 +64,30 @@ def inbox_step():
 
 def attachment_step(transport):
     with Session.begin() as db:
-        a = db.scalar(select(Attachment).where(Attachment.status == "pending").with_for_update(skip_locked=True).limit(1))
+        a = db.scalar(
+            select(Attachment).where(Attachment.status == "pending").with_for_update(skip_locked=True).limit(1)
+        )
         if not a:
             return False
         try:
-            a.storage_path, a.size, a.sha256 = download(a, transport.client)
+            from ama.storage_policy import check_attachment, current as storage_policy
+
+            check_attachment(db, a)
+            storage = storage_policy(db)
+            a.storage_path, a.size, a.sha256 = download(
+                a, transport.client, **({"max_bytes": storage.data["max_file_bytes"]} if storage else {})
+            )
             a.status = "stored"
             w = db.get(Work, a.work_id)
             target = db.get(Binding, w.binding_id)
-            message = queue(db, target, f"attachment:{a.id}", f"Новый материал: {w.title}\nПункт: {w.id}\nАвтор: {a.author_id}",
-                  work=w, attachment_id=a.id)
+            message = queue(
+                db,
+                target,
+                f"attachment:{a.id}",
+                f"Новый материал: {w.title}\nПункт: {w.id}\nАвтор: {a.author_id}",
+                work=w,
+                attachment_id=a.id,
+            )
             if a.album_id:
                 message.payload = {**message.payload, "silent": True}
                 album_key = hashlib.sha256(f"{w.id}:{a.author_id}:{a.album_id}".encode()).hexdigest()
@@ -73,8 +97,13 @@ def attachment_step(transport):
             a.status = "failed"
             db.add(Audit(object_id=a.id, action="ATTACHMENT_SAVE_FAILED", data={"error": type(error).__name__}))
             w = db.get(Work, a.work_id)
-            queue(db, db.get(Binding, w.binding_id), f"attachment-error:{a.id}",
-                  f"Не удалось сохранить вложение пункта {w.id}. Оно не принято; требуется повтор сохранения.", work=w)
+            queue(
+                db,
+                db.get(Binding, w.binding_id),
+                f"attachment-error:{a.id}",
+                f"Не удалось сохранить вложение пункта {w.id}. Оно не принято; требуется повтор сохранения.",
+                work=w,
+            )
         return True
 
 
@@ -86,6 +115,7 @@ def next_partner_window(db, binding, current):
     if not data:
         raise BusinessError("Не согласовано окно уведомлений партнёра.")
     from ama.calendar import Calendar
+
     cal = Calendar(data)
     local = current.replace(tzinfo=timezone.utc).astimezone(cal.tz)
     start = datetime.combine(local.date(), cal.start, cal.tz)
@@ -97,8 +127,13 @@ def next_partner_window(db, binding, current):
 
 def outbox_step(transport):
     with Session.begin() as db:
-        row = db.scalar(select(Outbox).where(Outbox.status == "pending", Outbox.retry_at <= now())
-                        .order_by(Outbox.created_at).with_for_update(skip_locked=True).limit(1))
+        row = db.scalar(
+            select(Outbox)
+            .where(Outbox.status == "pending", Outbox.retry_at <= now())
+            .order_by(Outbox.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
         if not row:
             return False
         b = db.get(Binding, row.binding_id) if row.binding_id else None
@@ -106,7 +141,8 @@ def outbox_step(transport):
             if not b or not b.active or not b.verified or row.binding_version != b.version:
                 row.status, row.error = "blocked", "Route changed; verify/migrate recipient"
                 from ama.sla import delivery_problem
-                delivery_problem(db,row)
+
+                delivery_problem(db, row)
                 return True
             if row.work_id:
                 w = db.get(Work, row.work_id)
@@ -114,68 +150,115 @@ def outbox_step(transport):
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
+            from ama.publications import deliverable as publication_deliverable, refresh as publication_refresh
+
+            allowed = publication_deliverable(db, row)
+            if allowed is None:
+                row.retry_at = now() + timedelta(seconds=5)
+                return True
+            if not allowed:
+                row.status, row.error = "blocked", "Publication rights, recipient or selected files changed"
+                publication_refresh(db, row)
+                return True
             from ama.finance import deliverable as finance_deliverable
-            if not finance_deliverable(db,row):
-                row.status,row.error="cancelled","Financial context changed before delivery"
+
+            if not finance_deliverable(db, row):
+                row.status, row.error = "cancelled", "Financial context changed before delivery"
                 return True
             from ama.learning import deliverable as learning_deliverable
-            if not learning_deliverable(db,row):
-                row.status,row.error="cancelled","Learning context changed"
+
+            if not learning_deliverable(db, row):
+                row.status, row.error = "cancelled", "Learning context changed"
                 return True
             from ama.packets import deliverable as packet_deliverable
-            if not packet_deliverable(db,row):
-                row.status, row.error="cancelled","Packet context changed before delivery"
+
+            if not packet_deliverable(db, row):
+                row.status, row.error = "cancelled", "Packet context changed before delivery"
                 return True
             from ama.sla import deliverable
+
             if not deliverable(db, row):
                 row.status, row.error = "cancelled", "SLA context changed before delivery"
                 return True
-            if row.payload.get('digital_group') or row.payload.get('digital_file'):
+            if row.payload.get("digital_group") or row.payload.get("digital_file"):
                 from ama.digital import deliverable as digital_deliverable
-                if not digital_deliverable(db,row):
-                    row.status,row.error='blocked','Цифровой маршрут / назначение изменились.'
+
+                if not digital_deliverable(db, row):
+                    row.status, row.error = "blocked", "Цифровой маршрут / назначение изменились."
                     return True
             if row.payload.get("public_record"):
                 from ama.models import Record
                 from ama.prospects import approved, brand
-                material=db.get(Record,row.payload["public_record"])
-                if not material or not approved(material) or not material.data.get("public",True) or not brand(db,material.data.get("brand_id")) or material.version!=row.payload.get("public_record_version"):
-                    row.status,row.error="cancelled","Public material changed before delivery"
+
+                material = db.get(Record, row.payload["public_record"])
+                if (
+                    not material
+                    or not approved(material)
+                    or not material.data.get("public", True)
+                    or not brand(db, material.data.get("brand_id"))
+                    or material.version != row.payload.get("public_record_version")
+                ):
+                    row.status, row.error = "cancelled", "Public material changed before delivery"
                     return True
             if row.payload.get("template_id"):
                 from ama.models import Record
-                template=db.get(Record,row.payload["template_id"])
-                if not template or not template.published or template.version!=row.payload.get("template_version"):
-                    row.status,row.error="cancelled","Reminder template changed before delivery"
+
+                template = db.get(Record, row.payload["template_id"])
+                if not template or not template.published or template.version != row.payload.get("template_version"):
+                    row.status, row.error = "cancelled", "Reminder template changed before delivery"
                     return True
             if row.payload.get("ui_actor"):
                 from ama.auth import Actor
                 from ama.ui.access import grants_hash
+
                 if not b or grants_hash(db, Actor(row.payload["ui_actor"], b.id)) != row.payload.get("ui_grants"):
                     raise BusinessError("Права пользователя изменились. Откройте меню или сформируйте отчёт заново.")
             if row.payload.get("sales_actor"):
                 from ama.auth import Actor
                 from ama.ui.access import grants_hash
                 from ama.models import SalesCase
-                case = db.get(SalesCase,row.payload["case_id"])
-                if not case or case.owner_id != row.payload["sales_actor"] or grants_hash(db,Actor(row.payload["sales_actor"],row.payload["sales_actor_binding"])) != row.payload["sales_grants"]:
+
+                case = db.get(SalesCase, row.payload["case_id"])
+                if (
+                    not case
+                    or case.owner_id != row.payload["sales_actor"]
+                    or grants_hash(db, Actor(row.payload["sales_actor"], row.payload["sales_actor_binding"]))
+                    != row.payload["sales_grants"]
+                ):
                     raise BusinessError("Ответственный или его права изменились. Подготовьте ответ заново.")
             if row.payload.get("lead_id"):
                 from ama.models import Lead
-                lead = db.scalar(select(Lead).where(Lead.id==row.payload["lead_id"]).with_for_update())
-                if row.payload.get("sales_reply") and lead and lead.data.get("contact") != row.payload.get("recipient_contact"):
+
+                lead = db.scalar(select(Lead).where(Lead.id == row.payload["lead_id"]).with_for_update())
+                if (
+                    row.payload.get("sales_reply")
+                    and lead
+                    and lead.data.get("contact") != row.payload.get("recipient_contact")
+                ):
                     raise BusinessError("Подтверждённый канал лида изменился. Проверьте адресата заново.")
-                if (not lead or (lead.no_contact and not (row.payload.get("reply_to_inbound") and
-                        row.payload.get("silence_epoch") == lead.data.get("silence", {}).get("epoch"))) or
-                    (row.payload.get("lead_touch_id") and not reminders.deliverable(db, lead, row.payload))):
+                if (
+                    not lead
+                    or (
+                        lead.no_contact
+                        and not (
+                            row.payload.get("reply_to_inbound")
+                            and row.payload.get("silence_epoch") == lead.data.get("silence", {}).get("epoch")
+                        )
+                    )
+                    or (row.payload.get("lead_touch_id") and not reminders.deliverable(db, lead, row.payload))
+                ):
                     row.status, row.error = "cancelled", "Lead opted out"
                     return True
-            if row.payload.get("sales_reply") and lead and row.payload.get("silence_epoch") != lead.data.get("silence",{}).get("epoch"):
-                row.status,row.error="blocked","Client reacted after reply preview; review context"
+            if (
+                row.payload.get("sales_reply")
+                and lead
+                and row.payload.get("silence_epoch") != lead.data.get("silence", {}).get("epoch")
+            ):
+                row.status, row.error = "blocked", "Client reacted after reply preview; review context"
                 return True
             if row.payload.get("lead_touch_id"):
-                if reminders.message_count(db,lead,["sent","sending","uncertain"]) >= 2:
-                    row.status,row.error="cancelled","Two reminder slots already delivered or reserved"
+                if reminders.message_count(db, lead, ["sent", "sending", "uncertain"]) >= 2:
+                    row.status, row.error = "cancelled", "Two reminder slots already delivered or reserved"
                     return True
                 cal = reminders.configured_calendar(db)
                 if not cal:
@@ -192,9 +275,11 @@ def outbox_step(transport):
             file_path = None
             if row.payload.get("packet_asset"):
                 from ama.packets import asset_path
-                file_path=asset_path(db,row)
+
+                file_path = asset_path(db, row)
             if row.payload.get("export_id"):
                 from ama.ui.reports import render as render_export
+
                 file_path = render_export(db, row.payload["export_id"])
             if row.payload.get("attachment_id"):
                 a = db.get(Attachment, row.payload["attachment_id"])
@@ -210,7 +295,11 @@ def outbox_step(transport):
         except BusinessError as error:
             row.status, row.error = "blocked", str(error)
             from ama.sla import delivery_problem
-            delivery_problem(db,row)
+
+            delivery_problem(db, row)
+            from ama.publications import refresh
+
+            refresh(db, row)
             return True
     # Лок на строке отпущен, но sending не подбирается другими воркерами.
     try:
@@ -231,8 +320,11 @@ def outbox_step(transport):
     except Exception as e:
         # ConnectError означает, что соединение не установлено; прочие исходы проверяет оператор.
         import httpx
+
         external_id, error = None, type(e).__name__
-        status = "pending" if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)) else "uncertain"
+        status = (
+            "pending" if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)) else "uncertain"
+        )
     with Session.begin() as db:
         row = db.scalar(select(Outbox).where(Outbox.id == message_id).with_for_update())
         row.status, row.external_id, row.error = status, external_id, error
@@ -241,32 +333,44 @@ def outbox_step(transport):
             row.status = "failed"
         if status == "sent" and payload.get("op") == "create_topic":
             from ama.sale_flow import on_topic
+
             try:
                 if payload.get("finance_topic") or payload.get("finance_batch_topic"):
                     from ama.finance import on_topic as finance_topic
-                    finance_topic(db,row,external_id)
+
+                    finance_topic(db, row, external_id)
                 elif payload.get("digital_group"):
                     from ama.digital import on_topic as digital_topic
-                    digital_topic(db,row,external_id)
+
+                    digital_topic(db, row, external_id)
                 elif payload.get("packet_target"):
                     from ama.packets import on_topic as packet_topic
-                    packet_topic(db,row,external_id)
+
+                    packet_topic(db, row, external_id)
                 else:
                     on_topic(db, row, external_id)
             except BusinessError as topic_error:
                 row.status, row.error = "uncertain", str(topic_error)
         from ama.sla import delivery_problem
-        delivery_problem(db,row)
+
+        delivery_problem(db, row)
         if status == "sent":
             reminders.on_delivered(db, row)
             from ama.sla import delivered
+
             delivered(db, row)
             from ama.packets import delivered as packet_delivered
-            packet_delivered(db,row)
+
+            packet_delivered(db, row)
             from ama.learning import delivered as learning_delivered
-            learning_delivered(db,row)
+
+            learning_delivered(db, row)
             from ama.finance import delivered as finance_delivered
-            finance_delivered(db,row)
+
+            finance_delivered(db, row)
+        from ama.publications import refresh as publication_refresh
+
+        publication_refresh(db, row)
         if status == "sent" and payload.get("probe"):
             b = db.get(Binding, row.binding_id)
             if b and b.version == row.binding_version:
@@ -277,25 +381,39 @@ def outbox_step(transport):
 
 def timer_step():
     with Session.begin() as db:
-        t = db.scalar(select(Timer).where(Timer.status == "pending", Timer.due_at <= now()).order_by(Timer.due_at)
-                      .with_for_update(skip_locked=True).limit(1))
+        t = db.scalar(
+            select(Timer)
+            .where(Timer.status == "pending", Timer.due_at <= now())
+            .order_by(Timer.due_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
         if not t:
             return False
         w = db.get(Work, t.work_id)
         from ama.sla import case_for
+
         if w and case_for(db, w):
             t.status = "cancelled"
             return True
         if not w or w.status == "done" or w.version != t.data.get("version"):
             t.status = "cancelled"
             return True
-        target = db.scalar(select(Binding).where(Binding.purpose == "management", Binding.active.is_(True), Binding.verified.is_(True)))
+        target = db.scalar(
+            select(Binding).where(Binding.purpose == "management", Binding.active.is_(True), Binding.verified.is_(True))
+        )
         if not target:
             # Не теряем сигнал. Пока не настроен маршрут, таймер остаётся видимым blocked.
             t.status = "blocked"
             db.add(Audit(object_id=t.id, action="TIMER_ROUTE_MISSING", data={"work_id": w.id}))
             return True
-        queue(db, target, f"timer:{t.id}", f"Контроль срока: {w.title}\nID: {w.id}\nОтветственный: {w.owner_id}\nСостояние: {w.status}", work=None)
+        queue(
+            db,
+            target,
+            f"timer:{t.id}",
+            f"Контроль срока: {w.title}\nID: {w.id}\nОтветственный: {w.owner_id}\nСостояние: {w.status}",
+            work=None,
+        )
         w.data = {**w.data, "overdue": True}
         t.status = "done"
         db.add(Audit(object_id=t.id, action="TIMER_DUE", data={"work_id": w.id}))
@@ -309,54 +427,62 @@ def reminder_step():
 
 def substitution_step():
     from ama.ui.configuration import substitution_step as process
+
     with Session.begin() as db:
         return process(db)
 
 
 def sales_step():
     from ama.sale_flow import tick
+
     with Session.begin() as db:
         return tick(db)
 
 
 def project_step():
     from ama.project_flow import tick
+
     with Session.begin() as db:
         return tick(db)
 
 
 def finance_step():
-    from ama.finance import debt_tick,schedule_tick,extra_tick
+    from ama.finance import debt_tick, schedule_tick, extra_tick
+
     with Session.begin() as db:
         return debt_tick(db) or schedule_tick(db) or extra_tick(db)
 
 
 def learning_step():
     from ama.learning import tick
+
     with Session.begin() as db:
         return tick(db)
 
 
 def digital_step():
     from ama.digital import tick
+
     with Session.begin() as db:
         return tick(db)
 
 
 def sla_step():
     from ama.sla import tick
+
     with Session.begin() as db:
         return tick(db)
 
 
 def packet_step(transport):
     from ama import packets
+
     with Session.begin() as db:
-        asset=packets.asset_step(db,transport)
+        asset = packets.asset_step(db, transport)
     with Session.begin() as db:
-        control=packets.control_tick(db)
+        control = packets.control_tick(db)
     with Session.begin() as db:
-        schedule=packets.schedule_tick(db)
+        schedule = packets.schedule_tick(db)
     return asset or control or schedule
 
 
@@ -366,7 +492,21 @@ def main():
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), digital_step(), finance_step(), learning_step(), sla_step(), packet_step(transport), outbox_step(transport)]
+                processed = [
+                    inbox_step(),
+                    attachment_step(transport),
+                    timer_step(),
+                    reminder_step(),
+                    substitution_step(),
+                    sales_step(),
+                    project_step(),
+                    digital_step(),
+                    finance_step(),
+                    learning_step(),
+                    sla_step(),
+                    packet_step(transport),
+                    outbox_step(transport),
+                ]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

@@ -118,6 +118,8 @@ def main():
             learning_delivered(db,obj)
             from ama.finance import delivered as finance_delivered
             finance_delivered(db,obj)
+            from ama.publications import refresh
+            refresh(db,obj)
             if obj.payload.get("op")=="create_topic":
                 if obj.payload.get("finance_topic") or obj.payload.get("finance_batch_topic"):
                     from ama.finance import on_topic

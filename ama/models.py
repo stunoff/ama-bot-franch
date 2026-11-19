@@ -872,3 +872,38 @@ class FinanceBatch(Base):
     work_id: Mapped[str | None] = mapped_column(ForeignKey('works.id'), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ClientPublication(Base):
+    __tablename__ = "client_publications"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64), index=True)
+    origin_key: Mapped[str] = mapped_column(String(180), unique=True)
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id"), index=True)
+    author_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    source_binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    target_binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(24), default="queued")
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class OperationsJob(Base):
+    __tablename__ = "operations_jobs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64), index=True)
+    origin_key: Mapped[str] = mapped_column(String(180), unique=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    requested_by: Mapped[str | None] = mapped_column(ForeignKey("people.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    started_at: Mapped[datetime | None] = mapped_column(UTC_DATETIME, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTC_DATETIME, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class OperationsMutex(Base):
+    __tablename__ = "operations_mutex"
+    bot_id: Mapped[str] = mapped_column(String(64), primary_key=True)

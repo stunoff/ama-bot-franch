@@ -18,7 +18,7 @@ def validate_url(url):
         raise BusinessError("Хранилище файла не входит в разрешённые домены адаптера.")
 
 
-def download(attachment, client):
+def download(attachment, client, *, max_bytes=None):
     cfg = settings()
     if attachment.platform == "telegram":
         response = client.get(f"https://api.telegram.org/bot{cfg.telegram_token}/getFile", params={"file_id": attachment.file_id})
@@ -54,7 +54,7 @@ def download(attachment, client):
             with temp.open("wb") as f:
                 for chunk in response.iter_bytes():
                     size += len(chunk)
-                    if size > cfg.max_file_bytes:
+                    if size > min(cfg.max_file_bytes, max_bytes if max_bytes is not None else cfg.max_file_bytes):
                         raise BusinessError("Превышен разрешённый размер файла.")
                     digest.update(chunk)
                     f.write(chunk)

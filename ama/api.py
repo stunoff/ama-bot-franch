@@ -8,7 +8,7 @@ from ama.db import Session
 from ama.models import Inbox
 from ama.adapters import normalize
 
-app = FastAPI(title="АМА Франчайзинг", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="АМА Франчайзинг", version="0.10.0", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.get("/health")

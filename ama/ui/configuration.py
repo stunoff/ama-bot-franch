@@ -116,6 +116,10 @@ def dependencies(db, rec):
 
 
 def validate_record(db, kind, value, *, published=False):
+    if kind == "policy" and published and value.get("policy_type") == "storage":
+        from ama.storage_policy import validate
+        validate(value)
+
     safe_values(value)
     if not isinstance(value, dict):
         raise BusinessError("Содержимое записи должно состоять из полей.")
@@ -282,6 +286,8 @@ def extra(db, actor, kind, d):
             learning_delivered(db,obj)
             from ama.finance import delivered as finance_delivered
             finance_delivered(db,obj)
+            from ama.publications import refresh
+            refresh(db,obj)
             if obj.payload.get("op") == "create_topic":
                 if obj.payload.get("finance_topic") or obj.payload.get("finance_batch_topic"):
                     from ama.finance import on_topic

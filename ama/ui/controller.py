@@ -6,7 +6,7 @@ from ama import admin
 from ama.config import settings
 from ama.errors import AccessDenied, BusinessError
 from ama.models import (UIDraft, Record, Entity, Role, Binding, EstablishmentBrand,
-                        ConfigurationRevision, Inbox, Outbox, Attachment, Timer, now, uid)
+                        ConfigurationRevision, Inbox, Outbox, Attachment, Timer, Work, now, uid)
 from ama.ui import access, business, repository as repo, schema, values
 from ama.ui.engine import button as B, render, view_draft, update, apply_field, PAGE_SIZE
 
@@ -17,7 +17,7 @@ SECTIONS = {
     "scenarios": ("Сценарии и чек-листы", ["policy:scenario", "policy:generic"]),
     "sales": ("Продажи", ["policy:source", "policy:faq", "policy:sales_content", "record:commercial", "record:consent"]),
     "training": ("Ознакомление ФП", ["record:course"]),
-    "materials": ("Материалы и сообщения", ["record:material", "record:template"]),
+    "materials": ("Материалы и сообщения", ["record:material", "record:template", "policy:storage"]),
     "calendars": ("Календари и сроки", ["record:calendar", "policy:sla"]),
     "payments": ("Платные работы", ["policy:payment"]),
     "schedules": ("Расписания и отчёты", ["policy:schedule","policy:broadcast_permission","policy:finance_recipient"]),
@@ -114,7 +114,7 @@ def content_lines(db, kind, data, path=None):
         return [field_label(db, spec, obj)]
     fields = spec.get("fields", [])
     known = {f["key"] for f in fields}
-    fields = fields + [schema.infer(k, v) for k, v in obj.items() if k not in known and k not in {"command", "policy_type", "knowledge_id", "knowledge_version"}]
+    fields = fields + [schema.infer(k, v) for k, v in obj.items() if k not in known and not k.startswith("_") and k not in {"command", "policy_type", "knowledge_id", "knowledge_version"}]
     return [f"{f['label']}: {field_label(db, f, obj.get(f['key']))}" for f in fields if f["key"] != "command"]
 
 
@@ -138,7 +138,7 @@ def draft_screen(db, actor, s, p):
         value = value or {}
         fields = spec.get("fields", [])
         known = {f["key"] for f in fields}
-        fields = fields + [schema.infer(k, v) for k, v in value.items() if k not in known and k not in {"command", "policy_type", "commercial_version", "knowledge_id", "knowledge_version"}]
+        fields = fields + [schema.infer(k, v) for k, v in value.items() if k not in known and not k.startswith("_") and k not in {"command", "policy_type", "commercial_version", "knowledge_id", "knowledge_version"}]
         items, page = paginate(fields, page)
         for field in items:
             label = field["label"] + (" *" if field["required"] else "")
@@ -224,6 +224,12 @@ def config_command(db, actor, obj, command, data=None, kind=None):
 
 
 def dispatch(db, actor, s, action, p):
+    if action.startswith("pub_"):
+        from ama.ui.publications import dispatch as publication_ui
+        return publication_ui(db,actor,s,action,p)
+    if action.startswith("ops_"):
+        from ama.ui.operations import dispatch as operations_ui
+        return operations_ui(db,actor,s,action,p)
     if action.startswith("fi_"):
         from ama.ui.finance import dispatch as finance_ui
         return finance_ui(db,actor,s,action,p)
@@ -257,7 +263,7 @@ def dispatch(db, actor, s, action, p):
         drafts = db.scalar(select(func.count()).select_from(UIDraft).where(UIDraft.bot_id == settings().bot_id,
                           UIDraft.person_id == actor.person_id, UIDraft.binding_id == actor.binding_id, UIDraft.status.in_(["draft", "saved", "checked"])))
         actions = [B(label, "section", section=k) for k, (label, _) in SECTIONS.items()]
-        actions += [B("Журнал и диагностика", "diagnostics"), B("История версий", "history"), B("Проверить настройки", "check"), B("Мои черновики", "drafts")]
+        actions += [B("Эксплуатация и приёмка", "ops_home"), B("Журнал и диагностика", "diagnostics"), B("История версий", "history"), B("Проверить настройки", "check"), B("Мои черновики", "drafts")]
         if access.staff(db, actor):
             actions.append(B("Рабочее место", "workspace"))
         return show(db, actor, s, f"Настройки АМА Франчайзинг\nРедакций изменений: {count}. Опубликованных записей: {published}.\nОшибок доставки / сверок: {errors}. Моих черновиков: {drafts}.\nВыберите раздел.", actions, "settings")
@@ -433,13 +439,16 @@ def dispatch(db, actor, s, action, p):
         return draft_screen(db, actor, s, {"draft_id": fresh.id})
     if action == "preview":
         d = view_draft(db, actor, p["draft_id"])
+        if d.kind == "publication:send":
+            from ama.publications import prepare
+            prepare(db,actor,d)
         result = business.preview(db, actor, d, publish=p.get("publish", False))
         d.status = "checked"
         d.before = {**d.before, "_checked": {"grants": access.grants_hash(db, actor),
                     "recipients": result.get("recipients"), "audience_versions": result.get("audience_versions"),
                     "reply_contact":result.get("reply_contact"), "reply_epoch":result.get("reply_epoch"), "case_versions":result.get("case_versions"),"digital_fingerprint":result.get("fingerprint"),"packet_fingerprint":result.get("fingerprint"),"packet_audience":result.get("audience")}}
         text = f"Предпросмотр: {d.title}\n" + "\n".join(content_lines(db, d.kind, d.data))
-        differences = values.structural_diff({k: v for k, v in d.before.items() if not k.startswith("_")}, d.data)
+        differences = values.structural_diff({k: v for k, v in d.before.items() if not k.startswith("_")}, {k: v for k,v in d.data.items() if not k.startswith("_")})
         if differences:
             text += "\nИзменённые поля: " + str(len(differences))
             for key, before, after in differences[:15]:
@@ -452,6 +461,9 @@ def dispatch(db, actor, s, action, p):
         if result.get("audience"):
             snap=result["audience"]
             text+=f"\nАудитория: {len({i['binding_id'] for i in snap['included']})} чатов, {len({i['partner_id'] for i in snap['included']})} ФП, {len({i['establishment_id'] for i in snap['included']})} предприятий; исключений: {len(snap['excluded'])}."
+        if d.kind == "publication:send":
+            snapshot=d.data["_snapshot"]
+            text+="\nФП: "+result["ФП"]+" · "+repo.name(db,snapshot["context"]["partner_person_id"])+"\nБренд: "+result["Бренд"]+"\nПредприятие: "+result["Предприятие"]+"\nКарточка: "+db.get(Work,d.target_id).title+"\nАдресат: "+result["recipient"]+"\nФайлы: "+(", ".join(result["Выбранные файлы"]) or "без файлов")+"\nПредпросмотр действует 15 минут. Отправится только выбранный комплект."
         text += f"\nУведомлений: {result.get('notifications', 0)}."
         if result.get("destinations"):
             text += "\nПолучатели: " + "; ".join(repo.label(db, db.get(Binding, r["binding_id"])) if r.get("binding_id") else f"{r['platform']} · {r['chat_id']}" for r in result["destinations"][:20])
@@ -487,7 +499,7 @@ def dispatch(db, actor, s, action, p):
                 if path:
                     lines.append("\n"+spec["label"])
                 for key, value in data.items():
-                    if key not in {"command", "_checked", "policy_type"}:
+                    if not key.startswith("_") and key not in {"command", "policy_type"}:
                         walk(value, path+[key])
             elif isinstance(data, list) and spec["type"] == "list":
                 for i, value in enumerate(data):
@@ -502,6 +514,10 @@ def dispatch(db, actor, s, action, p):
     if action == "confirm":
         d = view_draft(db, actor, p["draft_id"])
         result = business.confirm(db, actor, d, p["expected"], publish=p.get("publish", False))
+        if d.kind.startswith("ops:"):
+            return show(db,actor,s,"Запрос процедуры сохранён. ID: "+result["id"]+"\nОжидает операторского runner. Копия / проверка восстановления ещё не выполнена.",[B("Журнал процедур","ops_home"),B("Настройки","settings")],"ops_home")
+        if d.kind == "publication:send":
+            return show(db,actor,s,"Выбранный комплект передан в очередь. Доставка и приёмка — отдельные факты.",[B("История отправки","pub_list",work_id=d.target_id),B("К работе","work",work_id=d.target_id)])
         actions = [B("В меню", "home"), B("Мои черновики", "drafts")]
         if d.kind.startswith("digital:"):
             actions.insert(0,B("Продолжить цифровое подключение","dg_view",id=result["id"]))

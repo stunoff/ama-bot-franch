@@ -87,6 +87,8 @@ RECORD_VALUES = {
     "policy": [],
 }
 POLICIES = {
+    "storage": [f("title","Политика хранения",required=True),f("location","Место / юрисдикция хранения",required=True),f("access_owner","Ответственный за доступ",required=True),f("error_recipient","Получатель ошибок",required=True),f("retention_basis","Утверждённое основание сроков / правовых ограничений",required=True),f("retention_days","Срок хранения, дни","int",True,minimum=1),f("max_file_bytes","Максимальный размер файла, байты","int",True,minimum=1),f("extensions","Разрешённые расширения","multi",True,choices={k:k for k in (".jpg",".jpeg",".png",".webp",".pdf",".doc",".docx",".xls",".xlsx",".zip",".txt",".mp4")}),f("backup_max_age_hours","Предельный возраст копии, часы","int",True,minimum=1),f("restore_max_age_days","Период проверки восстановления, дни","int",True,minimum=1),f("approval","Утверждение владельца",required=True)],
+
     "finance_recipient": [f("title","Получатель",required=True),f("recipient_key","Устойчивый идентификатор банковского получателя", "key",True),f("reference","Утверждённые реквизиты","url",True),f("approval","Основание финансового утверждения",required=True),*deepcopy(SCOPE)],
     "broadcast_permission": [ref("person_id","Автор с правом рассылки","person",True),f("brand_ids","Разрешённые бренды (пусто — все в области роли)","multiref",source="brand"),f("allow_general","Разрешена общая информация УК","bool"),*deepcopy(SCOPE),f("approval","Основание назначения права",required=True)],
     "scenario": [f("title", "Название сценария", required=True), choice("scenario", "Тип проекта", SCENARIOS, True),
@@ -120,6 +122,15 @@ POLICIES = {
 
 
 def fields_for(kind):
+    if kind.startswith("ops:"):
+        return [f("reason","Основание процедуры",required=True), *([ref("backup_id","Успешная резервная копия","operations_backup",True)] if kind=="ops:verify_restore" else [])]
+
+    if kind == "publication:send":
+        return [choice("mode","Действие",{"reply":"Ответить клиенту","request":"Запросить данные"},True),
+                f("text","Текст для клиента (до 2500 символов)",required=True),
+                f("attachment_ids","Только выбранные файлы","multiref",source="publication_file"),
+                f("reason","Почему нельзя продолжить без данных"),f("next_check","Контроль запроса данных","datetime")]
+
     if kind.startswith("finance:"):
         from ama.ui.finance import fields
         return fields(kind)

@@ -30,6 +30,7 @@ ADMIN_CATALOGS = {
     },
 }
 POLICY_LABELS = {
+    "storage": "Хранение, доступ и резервирование",
     "finance_recipient": "Договорные банковские получатели",
     "broadcast_permission": "Права рассылки ФП",
     "sales_content": "Карточки и материалы продаж",
@@ -160,7 +161,19 @@ def refs(db, actor, source, draft=None, search=""):
         scope_for_draft(db, draft) if draft else SimpleNamespace(partner_id=None, brand_id=None, establishment_id=None)
     )
     rows = []
-    if source in {"finance_receipt", "finance_decision"}:
+    if source == "operations_backup":
+        from ama.models import OperationsJob
+        from ama.admin import check_admin
+        check_admin(db,actor)
+        rows=[(j.id,j.id+" · "+j.created_at.isoformat()) for j in db.scalars(select(OperationsJob).where(OperationsJob.bot_id==settings().bot_id,OperationsJob.kind=="backup",OperationsJob.status=="succeeded"))]
+    elif source == "publication_file":
+        from ama.models import Attachment
+        from ama.publications import authorize
+        if draft and draft.target_id:
+            w=db.get(Work,draft.target_id)
+            authorize(db,actor,w)
+            rows=[(a.id,a.filename) for a in db.scalars(select(Attachment).where(Attachment.work_id==w.id,Attachment.status=="stored"))]
+    elif source in {"finance_receipt", "finance_decision"}:
         from ama import finance
         from ama.models import FinanceReceipt
 
@@ -350,6 +363,12 @@ def refs(db, actor, source, draft=None, search=""):
 def reference_label(db, source, value):
     if not value:
         return "не выбрано"
+    if source == "operations_backup":
+        return str(value)
+    if source == "publication_file":
+        from ama.models import Attachment
+        obj=db.get(Attachment,value)
+        return obj.filename if obj else "Файл недоступен"
     if source == "finance_receipt":
         from ama.models import FinanceReceipt
 

@@ -340,6 +340,9 @@ def dispatch(db, actor, s, action, p):
         if w.data.get("digital_program"):
             actions.append(B("Цифровой мастер: отдельные результаты", "dg_view", id=w.data["digital_program"]))
         if detail:
+            if db.get(Binding,actor.binding_id).purpose != "client":
+                actions.append(B("Ответить клиенту / запросить данные", "pub_new", work_id=w.id))
+                actions.append(B("История отправки клиенту", "pub_list", work_id=w.id))
             if w.data.get("waiting"):
                 wait = w.data["waiting"]
                 text += f"\nОжидаем: {wait.get('party')}\nНужно: {wait.get('required')}\nСледующий контроль: {wait.get('next_check')}"
@@ -407,6 +410,8 @@ def dispatch(db, actor, s, action, p):
             [B("← Карточка", "work", work_id=w.id)],
             prompt=prompt,
         )
+    if action in {"work_files", "work_file"} and db.get(Binding,actor.binding_id).purpose == "client":
+        raise AccessDenied("Внутренний список файлов доступен только сотрудникам; опубликованные материалы приходят отдельным сообщением.")
     if action == "work_files":
         w = work(db, actor, p["work_id"], detail=True)
         rows = list(db.scalars(select(Attachment).where(Attachment.work_id == w.id).order_by(Attachment.created_at)))

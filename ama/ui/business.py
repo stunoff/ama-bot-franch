@@ -39,6 +39,15 @@ def authorize(db, actor, draft):
         raise AccessDenied("Черновик принадлежит другому пользователю, боту или чату.")
     if draft.status not in {"draft", "checked", "saved"}:
         raise BusinessError("Черновик уже применён или отменён. Откройте актуальную запись.")
+    if draft.kind.startswith("ops:"):
+        admin.check_admin(db,actor)
+        return
+    if draft.kind == "publication:send":
+        from ama.publications import authorize
+        w=db.get(Work,draft.target_id)
+        authorize(db,actor,w)
+        versioned(w,draft.target_version)
+        return
     if draft.kind.startswith('finance:'):
         from ama.finance import authorize_draft
         authorize_draft(db,actor,draft)
@@ -331,6 +340,13 @@ def from_object(db, actor, obj):
 def execute(db, actor, draft, *, publish=False):
     authorize(db, actor, draft)
     kind, d = draft.kind, deepcopy(draft.data)
+    if kind.startswith("ops:"):
+        from ama.operations_service import request
+        obj=request(db,actor,kind.split(":")[1],d["reason"],"ui:"+draft.id,d.get("backup_id"))
+        return {"id":obj.id,"status":obj.status,"execution":"Исполняет операторский runner; запрос не означает завершённую копию / проверку."}
+    if kind == "publication:send":
+        from ama.publications import send
+        return send(db,actor,draft)
     if kind.startswith("finance:"):
         from ama.finance import execute_draft
         return execute_draft(db,actor,draft,d)

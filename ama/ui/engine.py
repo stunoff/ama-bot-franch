@@ -41,7 +41,7 @@ def view_draft(db, actor, draft_id):
     d = db.scalar(select(UIDraft).where(UIDraft.id == draft_id).with_for_update())
     if not d or d.person_id != actor.person_id or d.binding_id != actor.binding_id or d.bot_id != settings().bot_id:
         raise AccessDenied("Черновик принадлежит другому человеку или чату.")
-    if d.kind.startswith(("finance:","learning:","digital:","packet:","obligation:")):
+    if d.kind.startswith(("publication:","ops:","finance:","learning:","digital:","packet:","obligation:")):
         business.authorize(db,actor,d)
     elif d.kind == "client_sla:return":
         business.authorize(db,actor,d)
@@ -87,6 +87,8 @@ def update(draft, data):
 
 
 def apply_field(db, actor, draft, path, value):
+    if any(isinstance(k,str) and k.startswith("_") for k in path):
+        raise AccessDenied("Служебные поля предпросмотра не редактируются.")
     spec = schema.descriptor(draft.kind, draft.data, path)
     immutable = {"record": {"key"}, "account": {"person_id", "platform", "external_id"}, "entity": {"partner_id"},
                  "role": {"person_id"}, "link": {"establishment_id", "brand_id"}}

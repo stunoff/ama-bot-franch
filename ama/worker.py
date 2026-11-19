@@ -114,6 +114,10 @@ def outbox_step(transport):
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
+            from ama.packets import deliverable as packet_deliverable
+            if not packet_deliverable(db,row):
+                row.status, row.error="cancelled","Packet context changed before delivery"
+                return True
             from ama.sla import deliverable
             if not deliverable(db, row):
                 row.status, row.error = "cancelled", "SLA context changed before delivery"
@@ -173,6 +177,9 @@ def outbox_step(transport):
                     row.retry_at = next_time
                     return True
             file_path = None
+            if row.payload.get("packet_asset"):
+                from ama.packets import asset_path
+                file_path=asset_path(db,row)
             if row.payload.get("export_id"):
                 from ama.ui.reports import render as render_export
                 file_path = render_export(db, row.payload["export_id"])
@@ -222,7 +229,11 @@ def outbox_step(transport):
         if status == "sent" and payload.get("op") == "create_topic":
             from ama.sale_flow import on_topic
             try:
-                on_topic(db, row, external_id)
+                if payload.get("packet_target"):
+                    from ama.packets import on_topic as packet_topic
+                    packet_topic(db,row,external_id)
+                else:
+                    on_topic(db, row, external_id)
             except BusinessError as topic_error:
                 row.status, row.error = "uncertain", str(topic_error)
         from ama.sla import delivery_problem
@@ -231,6 +242,8 @@ def outbox_step(transport):
             reminders.on_delivered(db, row)
             from ama.sla import delivered
             delivered(db, row)
+            from ama.packets import delivered as packet_delivered
+            packet_delivered(db,row)
         if status == "sent" and payload.get("probe"):
             b = db.get(Binding, row.binding_id)
             if b and b.version == row.binding_version:
@@ -295,13 +308,24 @@ def sla_step():
         return tick(db)
 
 
+def packet_step(transport):
+    from ama import packets
+    with Session.begin() as db:
+        asset=packets.asset_step(db,transport)
+    with Session.begin() as db:
+        control=packets.control_tick(db)
+    with Session.begin() as db:
+        schedule=packets.schedule_tick(db)
+    return asset or control or schedule
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     transport = Transport()
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), sla_step(), outbox_step(transport)]
+                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), sla_step(), packet_step(transport), outbox_step(transport)]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

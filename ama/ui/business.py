@@ -24,6 +24,55 @@ def authorize(db, actor, draft):
         raise AccessDenied("Черновик принадлежит другому пользователю, боту или чату.")
     if draft.status not in {"draft", "checked", "saved"}:
         raise BusinessError("Черновик уже применён или отменён. Откройте актуальную запись.")
+    if draft.kind.startswith(("packet:","obligation:")):
+        from ama import packets
+        from ama.models import PacketObligation,PacketRevision,PacketPublication,PacketSchedule
+        action=draft.kind.split(":")[1]
+        if draft.kind.startswith("obligation:"):
+            obj=db.get(PacketObligation,draft.target_id)
+            if not obj:
+                raise BusinessError("Обязательство не найдено.")
+            if action=="reschedule":
+                if actor.person_id!=obj.curator_id or not access.scope(db,actor,obj,{"curator","support_head"}):
+                    raise AccessDenied("Срок назначает закреплённый куратор.")
+            else:
+                packets.authorize_ob(db,actor,obj,True)
+            versioned(obj,draft.target_version)
+        elif action=="answer":
+            obj=db.get(Work,draft.target_id)
+            if not obj or obj.kind!="packet_question" or not access.can_work(db,actor,obj,detail=True) or obj.owner_id!=actor.person_id:
+                raise AccessDenied("Нет доступа к ответу по вопросу.")
+            versioned(obj,draft.target_version)
+        elif action=="question":
+            obj=db.get(PacketRevision,draft.target_id)
+            if not obj or not packets.visible_items(db,actor,obj):
+                raise AccessDenied("Редакция не видна в этом чате.")
+            versioned(obj,draft.target_version)
+        elif action in {"create","schedule"}:
+            packets.publisher(db,actor)
+        elif action=="stop":
+            obj=db.get(PacketSchedule,draft.target_id)
+            if not obj or obj.author_id!=actor.person_id:
+                raise AccessDenied("Расписание другого автора.")
+            packets.publisher(db,actor)
+            versioned(obj,draft.target_version)
+        elif action=="retry":
+            obj=db.get(PacketPublication,draft.target_id)
+            if not obj:
+                raise BusinessError("Публикация не найдена.")
+            packets.authorize_edit(db,actor,packets.get(db,db.get(PacketRevision,obj.revision_id).packet_id))
+            versioned(obj,draft.target_version)
+        else:
+            obj=packets.get(db,draft.target_id)
+            if action=="report":
+                if not packets.staff_visible(db,actor,obj):
+                    raise AccessDenied("Нет получателей вашей области.")
+            elif action=="add":
+                packets.publisher(db,actor)
+            else:
+                packets.authorize_edit(db,actor,obj)
+            versioned(obj,draft.target_version)
+        return
     if draft.kind == "client_sla:return":
         from ama.auth import require
         obj=db.get(Work,draft.target_id)
@@ -159,6 +208,23 @@ def from_object(db, actor, obj):
 def execute(db, actor, draft, *, publish=False):
     authorize(db, actor, draft)
     kind, d = draft.kind, deepcopy(draft.data)
+    if kind.startswith(("packet:","obligation:")):
+        from ama import packets
+        action=kind.split(":")[1]
+        if action=="report":
+            from ama.ui.reports import create_export
+            from datetime import timedelta
+            today=(now()+timedelta(hours=3)).date()
+            return create_export(db,actor,{"report":"packets","packet_id":draft.target_id,"start":(today-timedelta(days=365)).isoformat(),"end":today.isoformat()},"ui:"+draft.id)
+        if action=="create":
+            return packets.create(db,actor,d,draft.id)
+        if action=="schedule":
+            return packets.schedule(db,actor,d,draft.id)
+        if action in {"revise","question","submit","answer"}:
+            handler={"revise":packets.revise,"question":packets.question,"submit":packets.submit,"answer":packets.answer}[action]
+            return handler(db,actor,draft.target_id,draft.target_version,d,draft.id)
+        handler={"typo":packets.typo,"add":packets.add_recipients,"retry":packets.retry_publication,"ack":packets.acknowledge,"stop":packets.stop_schedule,"reschedule":packets.reschedule_obligation}[action]
+        return handler(db,actor,draft.target_id,draft.target_version,d)
     if kind == "client_sla:return":
         from ama.sla import partner_return
         obj=partner_return(db,actor,db.get(Work,draft.target_id),draft.target_version,d,"ui:"+draft.id)
@@ -320,6 +386,10 @@ def confirm(db, actor, draft, expected, *, publish=False):
         lead = db.get(Lead,case.lead_id)
         if lead.data.get("contact") != checked.get("reply_contact") or lead.data.get("silence",{}).get("epoch") != checked.get("reply_epoch"):
             raise Conflict("Лид ответил или изменился подтверждённый канал. Проверьте адресата и текст заново.")
+    if draft.kind in {"packet:create","packet:revise","packet:add","packet:schedule"}:
+        current=preview(db,actor,draft)
+        if current.get("fingerprint")!=checked.get("packet_fingerprint"):
+            raise Conflict("Аудитория, материалы или разрешения изменились. Подготовьте новый предпросмотр.")
     if draft.kind == "broadcast":
         current = preview(db, actor, draft)
         if current["audience_versions"] != checked.get("audience_versions") or current["recipients"] != checked.get("recipients"):

@@ -87,6 +87,7 @@ RECORD_VALUES = {
     "policy": [],
 }
 POLICIES = {
+    "broadcast_permission": [ref("person_id","Автор с правом рассылки","person",True),f("brand_ids","Разрешённые бренды (пусто — все в области роли)","multiref",source="brand"),f("allow_general","Разрешена общая информация УК","bool"),*deepcopy(SCOPE),f("approval","Основание назначения права",required=True)],
     "scenario": [f("title", "Название сценария", required=True), choice("scenario", "Тип проекта", SCENARIOS, True),
                  f("blocks", "Пункты и зависимости", "list", True, fields=POLICY_BLOCK), f("approval", "Подтверждение владельца процесса", required=True)],
     "sla": [f("title", "Название профиля", required=True), ref("route", "Контур", "record:route", True),
@@ -118,6 +119,9 @@ POLICIES = {
 
 
 def fields_for(kind):
+    if kind.startswith(("packet:","obligation:")):
+        from ama.ui.packet_schema import fields
+        return fields(kind.split(":")[1])
     if kind == "work:take":
         return [f("due_at","Плановый результат для длительной работы (для обычной не требуется)","datetime"),f("reason","Объём / этап поиска и основание даты")]
     if kind == "client_sla:return":
@@ -194,6 +198,10 @@ def fields_for(kind):
             details += [f("city", "Город"), f("address", "Адрес"), f("timezone", "Часовой пояс", "timezone"),
                         f("call_center_applicable", "Услуга КЦ согласована", "bool"),
                         f("notification_window", "Согласованное окно уведомлений", "object", fields=deepcopy(CALENDAR))]
+        if entity_kind=="partner":
+            details += [ref("partner_person_id","Уполномоченный ФП (при нескольких назначениях)","person"),ref("curator_id","Закреплённый куратор","person")]
+        if entity_kind=="establishment":
+            details += [ref("curator_id","Куратор физического предприятия","person"),f("format","Формат предприятия"),choice("lifecycle","Состояние",{"operating":"Работающее","starting":"Запускающееся","unknown":"Не определено"})]
         return fields + [f("data", "Свойства", "object", fields=details), REASON]
     if kind == "person":
         return [f("name", "Имя сотрудника", required=True, maximum=200), REASON]
@@ -221,7 +229,7 @@ def fields_for(kind):
     if kind == "broadcast":
         return [f("text", "Текст публикации", required=True, maximum=3500), ref("brand_id", "Бренд (пусто — общая информация)", "brand")]
     if kind == "export":
-        return [choice("report", "Вид отчёта", {"works": "Работы и сроки", "summary": "Сводка сопровождения", "training": "Ознакомление ФП", "sales": "Совместимый отчёт продаж 0.2", "sales_events": "Продажи: события периода", "sales_funnel": "Продажи: текущая воронка", "sales_cohort": "Продажи: когорта первой передачи", "audit": "Журнал настроек"}, True),
+        return [choice("report", "Вид отчёта", {"packets":"Отчёт конкретного пакета (из карточки)", "works": "Работы и сроки", "summary": "Сводка сопровождения", "training": "Ознакомление ФП", "sales": "Совместимый отчёт продаж 0.2", "sales_events": "Продажи: события периода", "sales_funnel": "Продажи: текущая воронка", "sales_cohort": "Продажи: когорта первой передачи", "audit": "Журнал настроек"}, True),
                 f("start", "Начало периода", "date", True), f("end", "Конец периода (включительно)", "date", True),
                 ref("partner_id", "ФП", "partner"), ref("establishment_id", "Предприятие", "establishment"), ref("brand_id", "Бренд", "brand")]
     if kind == "substitution":

@@ -308,6 +308,7 @@ def test_project_form_creates_work_without_json_project_id(ctx):
 
 
 def test_broadcast_audience_change_requires_new_preview(ctx):
+    ctx.db.add(Record(kind="policy",key="permission-curator",published=True,data={"policy_type":"broadcast_permission","person_id":"curator","allow_general":True,"approval":"Назначено администратором"}))
     ctx.db.get(Entity, "partner").data = {"notification_window": {"timezone": "Europe/Moscow", "weekdays": [0,1,2,3,4], "start": "11:00", "end": "20:00"}}
     d = controller.new_draft(ctx.db, ctx.curator, "broadcast", {"text": "Информация"})
     response = open_screen(ctx, ctx.curator, "preview", draft_id=d.id)

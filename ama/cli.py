@@ -112,6 +112,14 @@ def main():
             reminders.on_delivered(db, obj)
             from ama.sla import delivered
             delivered(db, obj)
+            from ama.packets import delivered as packet_delivered
+            packet_delivered(db,obj)
+            if obj.payload.get("op")=="create_topic":
+                if obj.payload.get("packet_target"):
+                    from ama.packets import on_topic
+                else:
+                    from ama.sale_flow import on_topic
+                on_topic(db,obj,args.external_id)
             db.add(Audit(object_id=obj.id, action="OPERATOR_DELIVERY_CONFIRMED", data={"external_id": args.external_id}))
 
 

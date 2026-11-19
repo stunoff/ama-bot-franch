@@ -158,6 +158,8 @@ def transition(db, actor, work_id, version, action, data, key):
     versioned(w, version)
     if w.status == "done":
         raise BusinessError("Работа завершена.")
+    from ama.packets import before_transition as packet_before
+    packet_before(db,actor,w,action,data)
     from ama.project_flow import before_transition
     before_transition(db, actor, w, action, data)
     from ama.sla import before_transition as sla_before
@@ -317,6 +319,8 @@ def transition(db, actor, work_id, version, action, data, key):
                 plan.stage = "ongoing"
                 plan.version += 1
                 stamp(db, actor, plan, "STARTUP_CYCLE_COMPLETED", data={"work_id": w.id})
+    from ama.packets import after_transition as packet_after
+    packet_after(db,actor,w,action,data)
     db.add(Receipt(key=key, response={"id": w.id, "version": w.version}))
     return w
 

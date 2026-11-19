@@ -9,6 +9,8 @@ def preview(db, actor, text, brand_id=None):
     require(db, actor, {"marketing_manager", "support_head", "curator"})
     if db.get(Binding, actor.binding_id).purpose == "client":
         raise AccessDenied("Рассылки создаются из внутреннего рабочего чата.")
+    from ama.packets import publisher
+    publisher(db,actor,general=brand_id is None)
     bindings = []
     for b in db.scalars(select(Binding).where(Binding.purpose == "client", Binding.active.is_(True), Binding.verified.is_(True))):
         if brand_id and b.brand_id != brand_id:
@@ -18,6 +20,7 @@ def preview(db, actor, text, brand_id=None):
         scope = SimpleNamespace(binding_id=actor.binding_id, client_binding_id=b.id, pending_binding_id=None,
                                 partner_id=b.partner_id, brand_id=b.brand_id, establishment_id=b.establishment_id)
         if roles_for(db, actor, scope) & {"marketing_manager", "support_head", "curator"}:
+            publisher(db,actor,scope,general=brand_id is None)
             partner = db.get(__import__('ama.models', fromlist=['Entity']).Entity, b.partner_id)
             if not partner or not partner.data.get("notification_window"):
                 raise BusinessError("У адресата не настроено согласованное окно уведомлений.")
@@ -37,6 +40,8 @@ def publish(db, actor, broadcast_id, expected):
     b = db.scalar(select(Broadcast).where(Broadcast.id == broadcast_id).with_for_update())
     if not b or b.author_id != actor.person_id:
         raise AccessDenied("Предпросмотр рассылки недоступен.")
+    from ama.packets import publisher
+    publisher(db,actor)
     if b.published_at:
         return b
     versioned(b, expected)
@@ -46,6 +51,7 @@ def publish(db, actor, broadcast_id, expected):
         scope = SimpleNamespace(binding_id=actor.binding_id, client_binding_id=binding_id,
                                 partner_id=route.partner_id if route else None, brand_id=route.brand_id if route else None,
                                 establishment_id=route.establishment_id if route else None)
+        publisher(db,actor,scope)
         if not roles_for(db, actor, scope) & {"marketing_manager", "support_head", "curator"}:
             raise AccessDenied("Область роли изменилась после предпросмотра аудитории.")
         if not route or route.version != b.audience_versions[binding_id] or not route.active:

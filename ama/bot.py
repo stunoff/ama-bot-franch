@@ -11,7 +11,7 @@ from ama.service import queue, create_work, transition, attach, training_action,
 from ama import admin, sales, projects, broadcasts, operations, wizard, reminders
 
 MENU = [["Предприятия", "af:enterprises"], ["Мои задачи", "af:tasks"], ["Ознакомление", "af:training"],
-        ["База знаний", "af:knowledge"], ["Задать вопрос", "af:new"], ["Мои проекты", "af:projects"], ["Помощь", "af:help"]]
+        ["База знаний", "af:knowledge"], ["Задать вопрос", "af:new"], ["Мои проекты", "af:projects"], ["Сетевые обновления", "af:packets"], ["Помощь", "af:help"]]
 HELP = """АМА Франчайзинг
 /start — меню; /tasks — задачи; /enterprises — предприятия
 /training — персональное ознакомление; /knowledge — материалы
@@ -146,9 +146,13 @@ def handle(db, platform, raw):
         ui.reply(db, actor, event, ui.callback(db, actor, event.callback))
         return
     if event.files:
+        from ama.packets import asset_receive
+        if asset_receive(db,actor,event):
+            send(db,event,"Файлы пакета приняты на сохранение. После сохранения откройте предпросмотр; отправка получателям ещё не выполнялась.")
+            return
         from ama.models import MediaGroup
         parts = event.text.split()
-        work_id = parts[1] if len(parts) > 1 and parts[0] == "/file" else ui.attachment_context(db, actor) if internal else None
+        work_id = parts[1] if len(parts) > 1 and parts[0] == "/file" else ui.attachment_context(db, actor)
         for i, f in enumerate(event.files):
             group = None
             group_key = None
@@ -182,6 +186,9 @@ def handle(db, platform, raw):
             return
     if event.callback:
         p = event.callback.split(":")
+        if p[1] == "pack":
+            ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_view",{"revision_id":p[2]}))
+            return
         if p[1] == "return":
             ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"sla_client_return",{"work_id":p[2]}))
             return
@@ -207,6 +214,12 @@ def handle(db, platform, raw):
             text = "/" + p[1]
     command, _, arg = text.partition(" ")
     command = command.split("@")[0].lower()
+    if command == "/broadcast" and not arg:
+        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_list"))
+        return
+    if command == "/packets" and not arg:
+        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_list"))
+        return
     if command == "/sla" and not arg:
         ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"sla_list"))
         return

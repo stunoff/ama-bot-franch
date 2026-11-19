@@ -199,7 +199,7 @@ def validate_record(db, kind, value, *, published=False):
     if kind == "policy" and published and value.get("policy_type") == "sla":
         from ama.sla import validate_profile
         validate_profile(value)
-    if kind == "policy" and published and value.get("policy_type") in {"scenario", "sla", "payment", "schedule", "faq"}:
+    if kind == "policy" and published and value.get("policy_type") in {"scenario", "sla", "payment", "schedule", "faq","broadcast_permission"}:
         if not value.get("approval"):
             raise BusinessError("Укажите основание уполномоченного владельца процесса.")
 
@@ -276,8 +276,13 @@ def extra(db, actor, kind, d):
             reminders.on_delivered(db, obj)
             from ama.sla import delivered
             delivered(db, obj)
+            from ama.packets import delivered as packet_delivered
+            packet_delivered(db,obj)
             if obj.payload.get("op") == "create_topic":
-                from ama.sale_flow import on_topic
+                if obj.payload.get("packet_target"):
+                    from ama.packets import on_topic
+                else:
+                    from ama.sale_flow import on_topic
                 on_topic(db, obj, d["external_id"])
             if obj.payload.get("probe"):
                 b = db.get(Binding, obj.binding_id)

@@ -14,7 +14,7 @@ ADMIN_CATALOGS = {
         "calendar": "Рабочие календари", "material": "Материалы и ссылки", "course": "Ознакомление ФП", "route": "Маршруты работ",
         "commercial": "Коммерческие условия", "consent": "Согласия", "template": "Тексты сообщений", "policy": "Сценарии и правила"}.items()},
 }
-POLICY_LABELS = {"sales_content": "Карточки и материалы продаж", "scenario": "Сценарии и чек-листы", "source": "Источники продаж", "faq": "База ответов консультанта",
+POLICY_LABELS = {"broadcast_permission":"Права рассылки ФП","sales_content": "Карточки и материалы продаж", "scenario": "Сценарии и чек-листы", "source": "Источники продаж", "faq": "База ответов консультанта",
                  "sla": "Сроки и эскалации", "payment": "Платные работы и реквизиты", "schedule": "Расписания и отчёты", "generic": "Прочие правила"}
 
 
@@ -106,7 +106,23 @@ def refs(db, actor, source, draft=None, search=""):
     technical = is_admin(db, actor)
     context = scope_for_draft(db, draft) if draft else SimpleNamespace(partner_id=None, brand_id=None, establishment_id=None)
     rows = []
-    if source in {"partner", "brand", "establishment"}:
+    if source == "packet_asset":
+        from ama.models import PacketAsset
+        rows=[(a.id,a.filename+" · "+a.status) for a in db.scalars(select(PacketAsset).where(PacketAsset.author_id==actor.person_id).order_by(PacketAsset.id))]
+    elif source in {"packet_checklist","packet_establishment"}:
+        from ama.models import PacketObligation,PacketRevision
+        from ama import packets
+        if source=="packet_checklist":
+            ob=db.get(PacketObligation,draft.target_id)
+            if ob:
+                packets.authorize_ob(db,actor,ob,True)
+                r=db.get(PacketRevision,ob.revision_id)
+                rows=[(item,item) for item in r.data.get("checklist",[])]
+        else:
+            r=db.get(PacketRevision,draft.target_id)
+            if r:
+                rows=list({(i["establishment_id"],i["name"]) for i in packets.visible_items(db,actor,r)})
+    elif source in {"partner", "brand", "establishment"}:
         for e in db.scalars(select(Entity).where(Entity.kind == source).order_by(Entity.name, Entity.id)):
             if e.data.get("archived") or not technical and not access.can_entity(db, actor, e):
                 continue
@@ -172,6 +188,14 @@ def refs(db, actor, source, draft=None, search=""):
 def reference_label(db, source, value):
     if not value:
         return "не выбрано"
+    if source=="packet_checklist":
+        return str(value)
+    if source=="packet_asset":
+        from ama.models import PacketAsset
+        asset=db.get(PacketAsset,value)
+        return asset.filename if asset else "Файл не найден"
+    if source=="packet_establishment":
+        return entity_name(db,value)
     if source.startswith("record:"):
         r = db.scalar(select(Record).where(Record.kind == source.split(":")[1], Record.key == value))
     elif source == "sales_expert":

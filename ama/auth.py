@@ -25,8 +25,14 @@ def roles_for(db, actor, obj=None):
     binding = db.get(Binding, actor.binding_id)
     if not binding or binding.bot_id != settings().bot_id or not binding.active or not binding.verified:
         raise AccessDenied("Привязка чата отключена.")
+    packet_view=False
+    if isinstance(obj,Work) and obj.kind=="packet_task" and binding.purpose=="client":
+        from ama.packets import work_presentation
+        packet_view=work_presentation(db,actor,obj)
     if obj:
         allowed = {obj.binding_id, obj.client_binding_id}
+        if packet_view:
+            allowed.add(binding.id)
         if isinstance(obj, Work) and obj.review_binding_id and actor.person_id == obj.reviewer_id:
             allowed.add(obj.review_binding_id)
         if isinstance(obj, Work) and obj.pending_binding_id:
@@ -35,7 +41,7 @@ def roles_for(db, actor, obj=None):
             raise AccessDenied("Карточка недоступна из этого чата/темы.")
         for field in ("partner_id", "brand_id", "establishment_id"):
             value = getattr(binding, field)
-            if value and value != getattr(obj, field):
+            if value and value != getattr(obj, field) and not (packet_view and field=="brand_id" and obj.brand_id is None):
                 raise AccessDenied("Область чата не совпадает с карточкой.")
     result = []
     for role in db.scalars(select(Role).where(Role.person_id == actor.person_id, Role.bot_id == settings().bot_id,
@@ -43,6 +49,11 @@ def roles_for(db, actor, obj=None):
         if role.expires_at and role.expires_at <= now():
             continue
         scope = obj or binding
+        if packet_view:
+            if role.name not in {"partner","observer"}:
+                continue
+            from types import SimpleNamespace
+            scope=SimpleNamespace(partner_id=obj.partner_id,brand_id=binding.brand_id,establishment_id=obj.establishment_id)
         if any(getattr(role, k) and (obj is not None or getattr(scope, k, None) is not None)
                and getattr(role, k) != getattr(scope, k, None)
                for k in ("partner_id", "brand_id", "establishment_id")):

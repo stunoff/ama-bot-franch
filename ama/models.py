@@ -626,3 +626,100 @@ class SLAEvent(Base):
     retry_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now, index=True)
     status: Mapped[str] = mapped_column(String(24), default="pending")
     data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Packet(Base):
+    __tablename__ = "packets"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    author_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    source_binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    topic_binding_id: Mapped[str | None] = mapped_column(ForeignKey("chat_bindings.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(250))
+    current_revision: Mapped[int] = mapped_column(Integer, default=1)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class PacketRevision(Base):
+    __tablename__ = "packet_revisions"
+    __table_args__ = (UniqueConstraint("packet_id", "number", name="uq_packet_revision"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    packet_id: Mapped[str] = mapped_column(ForeignKey("packets.id"))
+    number: Mapped[int] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON)
+    audience: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+
+
+class PacketPublication(Base):
+    __tablename__ = "packet_publications"
+    __table_args__ = (UniqueConstraint("revision_id", "binding_id", name="uq_packet_publication"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("packet_revisions.id"), index=True)
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    binding_version: Mapped[int] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    delivered_at: Mapped[datetime | None] = mapped_column(UTC_DATETIME, nullable=True)
+    data: Mapped[dict] = mapped_column(JSON)
+
+
+class PacketObligation(Base):
+    __tablename__ = "packet_obligations"
+    __table_args__ = (UniqueConstraint("revision_id", "scope_key", name="uq_packet_obligation"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("packet_revisions.id"), index=True)
+    scope_key: Mapped[str] = mapped_column(String(180))
+    partner_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
+    establishment_id: Mapped[str | None] = mapped_column(ForeignKey("entities.id"), nullable=True)
+    brand_id: Mapped[str | None] = mapped_column(ForeignKey("entities.id"), nullable=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    curator_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    work_id: Mapped[str | None] = mapped_column(ForeignKey("works.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    due_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    next_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now, index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class PacketQuestion(Base):
+    __tablename__ = "packet_questions"
+    __table_args__ = (UniqueConstraint("revision_id", "partner_id", "person_id", "scope_key", name="uq_packet_question"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("packet_revisions.id"))
+    partner_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    scope_key: Mapped[str] = mapped_column(String(180))
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id"))
+
+
+class PacketAsset(Base):
+    __tablename__ = "packet_assets"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    author_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    draft_id: Mapped[str] = mapped_column(ForeignKey("ui_drafts.id"))
+    platform: Mapped[str] = mapped_column(String(16))
+    file_id: Mapped[str] = mapped_column(Text)
+    filename: Mapped[str] = mapped_column(String(250))
+    source_key: Mapped[str] = mapped_column(String(180), unique=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class PacketSchedule(Base):
+    __tablename__ = "packet_schedules"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    author_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
+    until_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    data: Mapped[dict] = mapped_column(JSON)

@@ -20,7 +20,7 @@ SECTIONS = {
     "materials": ("Материалы и сообщения", ["record:material", "record:template"]),
     "calendars": ("Календари и сроки", ["record:calendar", "policy:sla"]),
     "payments": ("Платные работы", ["policy:payment"]),
-    "schedules": ("Расписания и отчёты", ["policy:schedule"]),
+    "schedules": ("Расписания и отчёты", ["policy:schedule","policy:broadcast_permission"]),
 }
 MODEL_CATALOG = {"binding": "bindings", "person": "people", "account": "accounts", "role": "roles", "link": "links"}
 
@@ -148,6 +148,8 @@ def draft_screen(db, actor, s, p):
         actions += navigation("draft", page, len(fields), draft_id=d.id, path=path)
         if d.kind == "record:policy:generic" and path[:2] == ["value", "settings"]:
             actions.append(B("+ Новый параметр", "extra_key", draft_id=d.id, path=path))
+    if d.kind in {"packet:create","packet:revise","packet:schedule"} and not path:
+        actions.append(B("Добавить файлы / фото пакета", "pk_asset", draft_id=d.id))
     if path and isinstance(path[-1], int):
         actions += [B("↑ Выше", "list_move", draft_id=d.id, path=path, delta=-1), B("↓ Ниже", "list_move", draft_id=d.id, path=path, delta=1),
                     B("Удалить пункт из черновика", "list_delete", draft_id=d.id, path=path)]
@@ -222,6 +224,9 @@ def config_command(db, actor, obj, command, data=None, kind=None):
 
 
 def dispatch(db, actor, s, action, p):
+    if action.startswith("pk_"):
+        from ama.ui.packets import dispatch as packet_ui
+        return packet_ui(db,actor,s,action,p)
     if action.startswith("sla_"):
         from ama.ui.sla import dispatch as sla_ui
         return sla_ui(db,actor,s,action,p)
@@ -421,7 +426,7 @@ def dispatch(db, actor, s, action, p):
         d.status = "checked"
         d.before = {**d.before, "_checked": {"grants": access.grants_hash(db, actor),
                     "recipients": result.get("recipients"), "audience_versions": result.get("audience_versions"),
-                    "reply_contact":result.get("reply_contact"), "reply_epoch":result.get("reply_epoch"), "case_versions":result.get("case_versions")}}
+                    "reply_contact":result.get("reply_contact"), "reply_epoch":result.get("reply_epoch"), "case_versions":result.get("case_versions"),"packet_fingerprint":result.get("fingerprint"),"packet_audience":result.get("audience")}}
         text = f"Предпросмотр: {d.title}\n" + "\n".join(content_lines(db, d.kind, d.data))
         differences = values.structural_diff({k: v for k, v in d.before.items() if not k.startswith("_")}, d.data)
         if differences:
@@ -433,13 +438,16 @@ def dispatch(db, actor, s, action, p):
                 except (IndexError, TypeError):
                     spec = schema.infer(key, after)
                 text += f"\n{spec['label']}: {field_label(db, spec, before)[:160]} → {field_label(db, spec, after)[:200]}"
+        if result.get("audience"):
+            snap=result["audience"]
+            text+=f"\nАудитория: {len({i['binding_id'] for i in snap['included']})} чатов, {len({i['partner_id'] for i in snap['included']})} ФП, {len({i['establishment_id'] for i in snap['included']})} предприятий; исключений: {len(snap['excluded'])}."
         text += f"\nУведомлений: {result.get('notifications', 0)}."
         if result.get("destinations"):
             text += "\nПолучатели: " + "; ".join(repo.label(db, db.get(Binding, r["binding_id"])) if r.get("binding_id") else f"{r['platform']} · {r['chat_id']}" for r in result["destinations"][:20])
         if "recipients" in result:
             text += f"\nБрендовых чатов: {len(result['recipients'])}."
         if "works" in result:
-            text += f"\nПунктов проекта: {len(result['works'])}."
+            text += f"\nПунктов проекта: {len(result['works']) if isinstance(result['works'],list) else result['works']}."
         if "contract_amount_minor" in result:
             text += "\nДоговорный пакет: "+values.display(result["contract_amount_minor"],{"type":"money"})+". Подтверждённых интересов: "+str(len(result["case_versions"]))
         if "rows" in result:
@@ -456,6 +464,8 @@ def dispatch(db, actor, s, action, p):
             text += "\nРежим: " + ("публикация" if p.get("publish") else "сохранение неопубликованной записи")
         actions = [B("Подтвердить применение", "confirm", draft_id=d.id, expected=d.version, publish=p.get("publish", False)),
                    B("Полный текст и поля", "content_preview", draft_id=d.id, publish=p.get("publish", False)), B("Вернуться к редактированию", "draft", draft_id=d.id), B("В меню", "home")]
+        if result.get("audience"):
+            actions.insert(1,B("Проверить включённые предприятия и исключения","pk_preview_audience",draft_id=d.id))
         return show(db, actor, s, text + "\nИзменения ещё не применены.", actions, "draft", draft_id=d.id)
     if action == "content_preview":
         d = view_draft(db, actor, p["draft_id"])

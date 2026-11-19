@@ -215,10 +215,12 @@ def test_cohort_does_not_include_old_success(ctx):
 
 
 def test_broadcast_one_message_per_brand_chat(ctx):
+    ctx.marketing=Actor("marketing","marketing")
+    ctx.db.add(Record(kind="policy",key="permission-marketing",published=True,data={"policy_type":"broadcast_permission","person_id":"marketing","brand_ids":["brand"],"allow_general":False,"approval":"Назначено администратором"}))
     partner = ctx.db.get(__import__('ama.models', fromlist=['Entity']).Entity, "partner")
     partner.data = {"notification_window": {"timezone": "Europe/Moscow", "weekdays": [0, 1, 2, 3, 4], "start": "11:00", "end": "20:00"}}
     ctx.db.flush()
-    b = broadcasts.preview(ctx.db, ctx.marketing, "Новость")
+    b = broadcasts.preview(ctx.db, ctx.marketing, "Новость", "brand")
     broadcasts.publish(ctx.db, ctx.marketing, b.id, b.version)
     broadcasts.publish(ctx.db, ctx.marketing, b.id, b.version)
     ctx.db.flush()

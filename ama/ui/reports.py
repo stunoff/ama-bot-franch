@@ -44,6 +44,9 @@ def rows(db, actor, data):
         if report in {"sales_events", "sales_funnel", "sales_cohort"}:
             from ama.sales_reports import build
             columns, items = build(db, actor, data, start, end)
+        elif report=="packets":
+            from ama.packets import report as packet_report
+            columns,items=packet_report(db,actor,data["packet_id"])
         elif report in {"works", "summary"}:
             work = [w for w in access.works(db, actor) if in_scope(data, w) and start <= w.created_at < end]
             if report == "works":

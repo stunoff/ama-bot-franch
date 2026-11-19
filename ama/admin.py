@@ -124,10 +124,18 @@ def _apply(db, actor, command, *, bootstrap=False):
             if w.pending_binding_id == obj.id:
                 w.pending_binding_id = new.id
             # Версии работы не меняются: бизнес-состояние и действующий срок остаются прежними.
+        from ama.packets import replace_binding as packet_replace
+        packet_replace(db,obj,new)
         from ama.models import ProjectPlan
         for plan in db.scalars(select(ProjectPlan).where(ProjectPlan.client_binding_id == obj.id).with_for_update()):
             plan.client_binding_id = new.id
             plan.version += 1
+        for pending in db.scalars(select(Outbox).where(Outbox.status.in_(["pending","failed","blocked"]))):
+            signer=pending.payload.get("packet_sender")
+            if signer and signer.get("binding_id")==obj.id:
+                from ama.auth import Actor
+                from ama.ui.access import grants_hash
+                pending.payload={**pending.payload,"packet_sender":{"person_id":signer["person_id"],"binding_id":new.id,"grants":grants_hash(db,Actor(signer["person_id"],new.id))}}
         for event in db.scalars(select(Outbox).where(Outbox.binding_id == obj.id, Outbox.status.in_(["pending", "failed"]))):
             event.binding_id, event.binding_version = new.id, new.version
             event.platform, event.chat_id, event.topic_key = new.platform, new.chat_id, new.topic_key

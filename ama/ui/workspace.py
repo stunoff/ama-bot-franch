@@ -130,7 +130,7 @@ def dispatch(db, actor, s, action, p):
                    B(f"Просрочено · {len(late)}", "works", filter="overdue"), B("Все доступные работы", "works"), B("Ожидания", "works", filter="waiting")]
         if granted & {"curator", "support_head", "marketing_manager"}:
             actions += [B("Предприятия", "enterprises"), B("Франчайзи-партнёры", "partners"), B("Создать работу…", "new", kind="create_work"), *( [B("Новый проект…", "new", kind="plan:create")] if granted & {"curator", "support_head"} else []),
-                        B("Мои проекты", "pp_list"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Информационная публикация…", "new", kind="broadcast")]
+                        B("Мои проекты", "pp_list"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Рассылки ФП", "pk_list")]
         if granted & {"support_head","curator"}:
             actions.append(B("Контроль SLA", "sla_list"))
         if "chief_marketer" in granted:

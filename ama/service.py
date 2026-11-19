@@ -152,6 +152,8 @@ def transition(db, actor, work_id, version, action, data, key):
     if not w:
         raise BusinessError("Работа не найдена.")
     roles = roles_for(db, actor, w)  # Даже повторная команда проходит актуальную проверку доступа.
+    from ama.digital import before_transition as digital_before
+    digital_before(db,actor,w,action,data)
     previous = db.get(Receipt, key)
     if previous:
         return w
@@ -347,17 +349,20 @@ def attach(db, actor, work_id, platform, file_id, filename, source_key, album_id
 
 
 def training_action(db, actor, course_key, action, expected=None):
-    require(db, actor, {"partner"})
-    if db.get(Binding, actor.binding_id).purpose != "client":
-        raise AccessDenied("Ознакомление доступно из клиентского брендового чата.")
+    from ama.digital import course_access
+    assigned_course=course_access(db,actor,course_key)
+    if not assigned_course:
+        require(db, actor, {"partner"})
+        if db.get(Binding, actor.binding_id).purpose != "client":
+            raise AccessDenied("Ознакомление доступно из клиентского брендового чата.")
     course = record(db, "course", course_key)
     if not course.data.get("cards"):
         raise BusinessError("Карточки курса не опубликованы.")
-    if course_key == "call_center":
+    if course_key == "call_center" and not assigned_course:
         binding = db.get(Binding, actor.binding_id)
         partner = db.get(Entity, binding.partner_id)
         if not partner or not partner.data.get("call_center_applicable"):
-            raise BusinessError("Ознакомление КЦ доступно после согласования услуги.")
+            raise BusinessError("Ознакомление КЦ доступно после согласования услуги или персонального назначения в цифровом мастере.")
     t = db.scalar(select(Training).where(Training.person_id == actor.person_id, Training.course_key == course_key,
                                         Training.course_version == course.version).with_for_update())
     if not t:

@@ -115,7 +115,9 @@ def main():
             from ama.packets import delivered as packet_delivered
             packet_delivered(db,obj)
             if obj.payload.get("op")=="create_topic":
-                if obj.payload.get("packet_target"):
+                if obj.payload.get("digital_group"):
+                    from ama.digital import on_topic
+                elif obj.payload.get("packet_target"):
                     from ama.packets import on_topic
                 else:
                     from ama.sale_flow import on_topic

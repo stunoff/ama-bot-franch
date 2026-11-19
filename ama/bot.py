@@ -11,7 +11,7 @@ from ama.service import queue, create_work, transition, attach, training_action,
 from ama import admin, sales, projects, broadcasts, operations, wizard, reminders
 
 MENU = [["Предприятия", "af:enterprises"], ["Мои задачи", "af:tasks"], ["Ознакомление", "af:training"],
-        ["База знаний", "af:knowledge"], ["Задать вопрос", "af:new"], ["Мои проекты", "af:projects"], ["Сетевые обновления", "af:packets"], ["Помощь", "af:help"]]
+        ["База знаний", "af:knowledge"], ["Задать вопрос", "af:new"], ["Мои проекты", "af:projects"], ["Сетевые обновления", "af:packets"], ["Цифровое подключение", "af:digital"], ["Помощь", "af:help"]]
 HELP = """АМА Франчайзинг
 /start — меню; /tasks — задачи; /enterprises — предприятия
 /training — персональное ознакомление; /knowledge — материалы
@@ -216,6 +216,9 @@ def handle(db, platform, raw):
     command = command.split("@")[0].lower()
     if command == "/broadcast" and not arg:
         ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_list"))
+        return
+    if (command == "/digital" and not arg) or text == "af:digital":
+        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"dg_list"))
         return
     if command == "/packets" and not arg:
         ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_list"))

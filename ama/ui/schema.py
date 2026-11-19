@@ -119,6 +119,9 @@ POLICIES = {
 
 
 def fields_for(kind):
+    if kind.startswith("digital:"):
+        from ama.ui.digital import fields
+        return fields(kind)
     if kind.startswith(("packet:","obligation:")):
         from ama.ui.packet_schema import fields
         return fields(kind.split(":")[1])

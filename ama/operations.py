@@ -13,6 +13,8 @@ def operation(db, actor, work_id, expected, action, data):
     roles_for(db, actor, w)
     versioned(w, expected)
     old, role = w.version, None
+    if w.data.get("digital_program") and action in {"passport","tech_confirm"}:
+        raise BusinessError("Используйте цифровой мастер: поля и результаты принимаются раздельно.")
     if action == "offer":
         role = require(db, actor, {"curator", "marketing_manager", "specialist"}, w)
         if db.get(Binding, w.binding_id).purpose not in {"projecting", "software", "personnel", "menu", "design", "advertising", "printing", "systems_training", "smm"}:

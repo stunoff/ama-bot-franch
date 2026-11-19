@@ -723,3 +723,40 @@ class PacketSchedule(Base):
     next_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
     until_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
     data: Mapped[dict] = mapped_column(JSON)
+
+
+class DigitalProgram(Base):
+    __tablename__ = "digital_programs"
+    __table_args__ = (UniqueConstraint("bot_id", "establishment_id", name="uq_digital_establishment"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    establishment_id: Mapped[str] = mapped_column(ForeignKey("entities.id"))
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id"), unique=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class DigitalFact(Base):
+    __tablename__ = "digital_facts"
+    __table_args__ = (UniqueConstraint("program_id", "scope_key", "field", name="uq_digital_fact"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    program_id: Mapped[str] = mapped_column(ForeignKey("digital_programs.id"), index=True)
+    scope_key: Mapped[str] = mapped_column(String(40))
+    field: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class DigitalStep(Base):
+    __tablename__ = "digital_steps"
+    __table_args__ = (UniqueConstraint("program_id", "scope_key", "component", name="uq_digital_step"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    program_id: Mapped[str] = mapped_column(ForeignKey("digital_programs.id"), index=True)
+    scope_key: Mapped[str] = mapped_column(String(40))
+    component: Mapped[str] = mapped_column(String(64))
+    mode: Mapped[str] = mapped_column(String(16), default="unconfirmed")
+    status: Mapped[str] = mapped_column(String(24), default="needs_data")
+    work_id: Mapped[str | None] = mapped_column(ForeignKey("works.id"), nullable=True)
+    due_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)

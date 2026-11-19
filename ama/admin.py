@@ -126,6 +126,8 @@ def _apply(db, actor, command, *, bootstrap=False):
             # Версии работы не меняются: бизнес-состояние и действующий срок остаются прежними.
         from ama.packets import replace_binding as packet_replace
         packet_replace(db,obj,new)
+        from ama.digital import replace_binding as digital_replace
+        digital_replace(db,obj,new)
         from ama.models import ProjectPlan
         for plan in db.scalars(select(ProjectPlan).where(ProjectPlan.client_binding_id == obj.id).with_for_update()):
             plan.client_binding_id = new.id

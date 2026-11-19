@@ -224,6 +224,9 @@ def config_command(db, actor, obj, command, data=None, kind=None):
 
 
 def dispatch(db, actor, s, action, p):
+    if action.startswith("dg_"):
+        from ama.ui.digital import dispatch as digital_ui
+        return digital_ui(db,actor,s,action,p)
     if action.startswith("pk_"):
         from ama.ui.packets import dispatch as packet_ui
         return packet_ui(db,actor,s,action,p)
@@ -426,7 +429,7 @@ def dispatch(db, actor, s, action, p):
         d.status = "checked"
         d.before = {**d.before, "_checked": {"grants": access.grants_hash(db, actor),
                     "recipients": result.get("recipients"), "audience_versions": result.get("audience_versions"),
-                    "reply_contact":result.get("reply_contact"), "reply_epoch":result.get("reply_epoch"), "case_versions":result.get("case_versions"),"packet_fingerprint":result.get("fingerprint"),"packet_audience":result.get("audience")}}
+                    "reply_contact":result.get("reply_contact"), "reply_epoch":result.get("reply_epoch"), "case_versions":result.get("case_versions"),"digital_fingerprint":result.get("fingerprint"),"packet_fingerprint":result.get("fingerprint"),"packet_audience":result.get("audience")}}
         text = f"Предпросмотр: {d.title}\n" + "\n".join(content_lines(db, d.kind, d.data))
         differences = values.structural_diff({k: v for k, v in d.before.items() if not k.startswith("_")}, d.data)
         if differences:
@@ -492,6 +495,8 @@ def dispatch(db, actor, s, action, p):
         d = view_draft(db, actor, p["draft_id"])
         result = business.confirm(db, actor, d, p["expected"], publish=p.get("publish", False))
         actions = [B("В меню", "home"), B("Мои черновики", "drafts")]
+        if d.kind.startswith("digital:"):
+            actions.insert(0,B("Продолжить цифровое подключение","dg_view",id=result["id"]))
         if d.kind.startswith("case:"):
             actions.insert(0, B("Открыть интерес", "sales_case", case_id=d.target_id))
         if d.kind.startswith("expert:"):

@@ -75,6 +75,8 @@ def work_actions(db, actor, w):
             actions.append("sla_complete_data")
         if case.data.get("critical_active"):
             actions.append("sla_recovered")
+    if w.data.get('digital_program'):
+        actions=[x for x in actions if x not in {'submit','accept','reject','cancel','handoff','reschedule'}]
     return actions
 
 
@@ -88,7 +90,7 @@ def operations(db, actor, w):
             result.append("offer")
     if w.kind == "debt" and "contract" in roles:
         result += ["invoice", "debt_payment", "deferral"]
-    if w.kind == "digital":
+    if w.kind == "digital" and not w.data.get("digital_program"):
         if roles & {"curator", "specialist"}:
             result.append("passport")
         if "specialist" in roles and actor.person_id == w.executor_id:
@@ -130,7 +132,7 @@ def dispatch(db, actor, s, action, p):
                    B(f"Просрочено · {len(late)}", "works", filter="overdue"), B("Все доступные работы", "works"), B("Ожидания", "works", filter="waiting")]
         if granted & {"curator", "support_head", "marketing_manager"}:
             actions += [B("Предприятия", "enterprises"), B("Франчайзи-партнёры", "partners"), B("Создать работу…", "new", kind="create_work"), *( [B("Новый проект…", "new", kind="plan:create")] if granted & {"curator", "support_head"} else []),
-                        B("Мои проекты", "pp_list"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Рассылки ФП", "pk_list")]
+                        B("Мои проекты", "pp_list"), B("Блокеры", "works", filter="blockers"), B("Запросы ФП", "works", filter="requests"), B("Календарь сроков", "calendar"), B("Рассылки ФП", "pk_list"), B("Цифровое подключение", "dg_list")]
         if granted & {"support_head","curator"}:
             actions.append(B("Контроль SLA", "sla_list"))
         if "chief_marketer" in granted:
@@ -184,6 +186,8 @@ def dispatch(db, actor, s, action, p):
         if w.pending_owner_id:
             text += f"\nПредложена передача: {repo.name(db, w.pending_owner_id)}. До принятия отвечает текущий владелец."
         actions = []
+        if w.data.get('digital_program'):
+            actions.append(B('Цифровой мастер: отдельные результаты','dg_view',id=w.data['digital_program']))
         if detail:
             if w.data.get("waiting"):
                 wait = w.data["waiting"]
@@ -311,7 +315,7 @@ def dispatch(db, actor, s, action, p):
                 text += "\nКЦ согласован: "+("Да" if passport.get("call_center_applicable") else "Не подтверждено")
                 for key in w.data.get("required_components", []):
                     text += "\n"+{"ama_rs": "АМА РС", "care": "Служба заботы", "call_center": "КЦ"}.get(key, key)+": "+("подключение подтверждено" if w.data.get("components", {}).get(key, {}).get("confirmed") else "не принято")
-        actions = [B("Работы предприятия", "works", establishment_id=e.id), B("Календарь сроков", "calendar", establishment_id=e.id), B("Новый проект…", "new", kind="plan:create", data={"partner_id": e.partner_id, "establishment_id": e.id}), B("← Предприятия", "enterprises"), B("В меню", "home")]
+        actions = [B("Цифровое подключение", "dg_list"), B("Работы предприятия", "works", establishment_id=e.id), B("Календарь сроков", "calendar", establishment_id=e.id), B("Новый проект…", "new", kind="plan:create", data={"partner_id": e.partner_id, "establishment_id": e.id}), B("← Предприятия", "enterprises"), B("В меню", "home")]
         return show(db, actor, s, text, actions, "enterprise", **p)
     if action == "leads":
         rows = access.leads(db, actor)

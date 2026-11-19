@@ -122,6 +122,11 @@ def outbox_step(transport):
             if not deliverable(db, row):
                 row.status, row.error = "cancelled", "SLA context changed before delivery"
                 return True
+            if row.payload.get('digital_group') or row.payload.get('digital_file'):
+                from ama.digital import deliverable as digital_deliverable
+                if not digital_deliverable(db,row):
+                    row.status,row.error='blocked','Цифровой маршрут / назначение изменились.'
+                    return True
             if row.payload.get("public_record"):
                 from ama.models import Record
                 from ama.prospects import approved, brand
@@ -229,7 +234,10 @@ def outbox_step(transport):
         if status == "sent" and payload.get("op") == "create_topic":
             from ama.sale_flow import on_topic
             try:
-                if payload.get("packet_target"):
+                if payload.get("digital_group"):
+                    from ama.digital import on_topic as digital_topic
+                    digital_topic(db,row,external_id)
+                elif payload.get("packet_target"):
                     from ama.packets import on_topic as packet_topic
                     packet_topic(db,row,external_id)
                 else:
@@ -302,6 +310,12 @@ def project_step():
         return tick(db)
 
 
+def digital_step():
+    from ama.digital import tick
+    with Session.begin() as db:
+        return tick(db)
+
+
 def sla_step():
     from ama.sla import tick
     with Session.begin() as db:
@@ -325,7 +339,7 @@ def main():
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), sla_step(), packet_step(transport), outbox_step(transport)]
+                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), digital_step(), sla_step(), packet_step(transport), outbox_step(transport)]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

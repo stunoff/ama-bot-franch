@@ -4,7 +4,8 @@ from sqlalchemy import select
 from ama import project_flow as flow
 from ama.config import settings
 from ama.models import ProjectPlan, ProjectLane, ProjectBlock, ProjectChange, ProjectRemark, ProjectCampaign, Work
-from ama.project_catalog import CATALOG, GROUPS
+from ama.project_catalog import GROUPS
+from ama.project_templates import template
 from ama.errors import AccessDenied, BusinessError
 from ama.ui import access, business, schema
 from ama.ui.controller import show, paginate, navigation, draft_screen
@@ -162,7 +163,7 @@ def dispatch(db, actor, s, action, params):
             actor,
             s,
             "Состав: выполнить / проверить / использовать готовое / не применяется. История завершённых работ сохраняется.",
-            [B(CATALOG[b.code]["title"] + " · " + b.status, "pp_block", project_id=p.id, block_id=b.id) for b in items]
+            [B(template(db, b)["title"] + " · " + b.status, "pp_block", project_id=p.id, block_id=b.id) for b in items]
             + navigation("pp_blocks", page, len(rows), project_id=p.id)
             + [B("← Проект", "pp_show", project_id=p.id)],
             "pp_blocks",
@@ -177,7 +178,7 @@ def dispatch(db, actor, s, action, params):
             flow.authorize(db, actor, p, b.lane)
             return begin(db, actor, s, "plan:change", p, {"block_id": b.id})
         text = (
-            CATALOG[b.code]["title"]
+            template(db, b)["title"]
             + "\nРежим: "
             + schema.MODES[b.mode]
             + "\nСтатус: "
@@ -202,7 +203,7 @@ def dispatch(db, actor, s, action, params):
                     "pp_group",
                     project_id=p.id,
                     lane=b.lane,
-                    group=CATALOG[b.code]["group"],
+                    group=template(db, b)["group"],
                     block_code=b.code,
                 )
             )
@@ -210,7 +211,7 @@ def dispatch(db, actor, s, action, params):
             w = db.get(Work, b.work_id)
             if w and access.can_work(db, actor, w, detail=True):
                 buttons.append(B("Работа", "work", work_id=w.id))
-                if b.code in {"kitchen_equipment", "systems_equipment", "community", "start_smm"}:
+                if b.code in {"kitchen_equipment", "systems_equipment", "community", "start_smm","bank","tax"}:
                     buttons.append(B("Спецификация / подтверждения…", "pp_work_details", work_id=w.id))
             if w and w.status != "done":
                 buttons.append(B("Согласовать изменение…", "pp_change", project_id=p.id, block_id=b.id))
@@ -236,7 +237,7 @@ def dispatch(db, actor, s, action, params):
                 + " UTC"
             )
         for b in flow.blocks(db, p).values():
-            item = CATALOG[b.code]
+            item = template(db, b)
             if item.get("anchor") and b.mode != "not_applicable":
                 dates.append(item["title"] + ": " + (b.data.get("waiting_reason") or b.status))
         for c in db.scalars(select(ProjectCampaign).where(ProjectCampaign.project_id == p.id)):

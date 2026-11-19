@@ -41,7 +41,7 @@ def view_draft(db, actor, draft_id):
     d = db.scalar(select(UIDraft).where(UIDraft.id == draft_id).with_for_update())
     if not d or d.person_id != actor.person_id or d.binding_id != actor.binding_id or d.bot_id != settings().bot_id:
         raise AccessDenied("Черновик принадлежит другому человеку или чату.")
-    if d.kind.startswith(("publication:","ops:","finance:","learning:","digital:","packet:","obligation:")):
+    if d.kind.startswith(("closure:","publication:","ops:","finance:","learning:","digital:","packet:","obligation:")):
         business.authorize(db,actor,d)
     elif d.kind == "client_sla:return":
         business.authorize(db,actor,d)

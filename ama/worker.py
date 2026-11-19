@@ -65,7 +65,10 @@ def inbox_step():
 def attachment_step(transport):
     with Session.begin() as db:
         a = db.scalar(
-            select(Attachment).where(Attachment.status == "pending").with_for_update(skip_locked=True).limit(1)
+            select(Attachment)
+            .where(Attachment.status.in_(["pending", "pending_local"]))
+            .with_for_update(skip_locked=True)
+            .limit(1)
         )
         if not a:
             return False
@@ -74,12 +77,13 @@ def attachment_step(transport):
 
             check_attachment(db, a)
             storage = storage_policy(db)
-            a.storage_path, a.size, a.sha256 = download(
-                a, transport.client, **({"max_bytes": storage.data["max_file_bytes"]} if storage else {})
-            )
+            if a.status != "pending_local":
+                a.storage_path, a.size, a.sha256 = download(
+                    a, transport.client, **({"max_bytes": storage.data["max_file_bytes"]} if storage else {})
+                )
             a.status = "stored"
             w = db.get(Work, a.work_id)
-            target = db.get(Binding, w.binding_id)
+            target = db.get(Binding, (w.review_binding_id or w.binding_id) if w.status == "review" else w.binding_id)
             message = queue(
                 db,
                 target,
@@ -150,6 +154,26 @@ def outbox_step(transport):
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
+            from ama.closures import deliverable as closure_deliverable
+
+            if not closure_deliverable(db, row):
+                row.status, row.error = "cancelled", "Unconfirmed closure context changed"
+                return True
+            from ama.legal_setup import deliverable as legal_deliverable
+
+            if not legal_deliverable(db, row):
+                row.status, row.error = "cancelled", "Legal setup recipient changed"
+                return True
+            from ama.brand_notices import deliverable as brand_deliverable
+
+            if not brand_deliverable(db, row):
+                row.status, row.error = "cancelled", "Brand access context changed"
+                return True
+            from ama.report_schedules import deliverable as report_deliverable
+
+            if not report_deliverable(db, row):
+                row.status, row.error = "cancelled", "Report plan changed"
+                return True
             from ama.publications import deliverable as publication_deliverable, refresh as publication_refresh
 
             allowed = publication_deliverable(db, row)
@@ -446,6 +470,27 @@ def project_step():
         return tick(db)
 
 
+def brand_step():
+    from ama.brand_notices import tick, wake
+
+    with Session.begin() as db:
+        wake(db)
+        return tick(db)
+
+
+def report_step():
+    from ama.report_schedules import tick
+
+    with Session.begin() as db:
+        return tick(db)
+
+
+def intake_step(transport):
+    from ama.intake import worker_step
+
+    return worker_step(transport, Session)
+
+
 def finance_step():
     from ama.finance import debt_tick, schedule_tick, extra_tick
 
@@ -493,6 +538,9 @@ def main():
         while True:
             try:
                 processed = [
+                    intake_step(transport),
+                    brand_step(),
+                    report_step(),
                     inbox_step(),
                     attachment_step(transport),
                     timer_step(),

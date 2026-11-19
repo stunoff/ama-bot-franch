@@ -1,4 +1,5 @@
 """Только протокол мессенджера: бизнес-прав здесь нет."""
+
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -19,6 +20,7 @@ class Incoming:
     callback_id: str | None = None
     private: bool = False
     files: list = field(default_factory=list)
+    reply_message_id: str | None = None
 
 
 def normalize(platform, raw):
@@ -36,11 +38,26 @@ def normalize(platform, raw):
             files.append({"file_id": photo["file_id"], "filename": "photo.jpg", "album_id": msg.get("media_group_id")})
         if msg.get("document") and not cb:
             doc = msg["document"]
-            files.append({"file_id": doc["file_id"], "filename": doc.get("file_name", "document"), "album_id": msg.get("media_group_id")})
-        return Incoming(key=f"tg:{raw['update_id']}", platform=platform, user_id=str(user["id"]),
-                        chat_id=str(msg["chat"]["id"]), topic=str(msg.get("message_thread_id", "")),
-                        text=msg.get("text") or msg.get("caption") or "", callback=(cb or {}).get("data"),
-                        callback_id=(cb or {}).get("id"), private=msg["chat"].get("type") == "private", files=files)
+            files.append(
+                {
+                    "file_id": doc["file_id"],
+                    "filename": doc.get("file_name", "document"),
+                    "album_id": msg.get("media_group_id"),
+                }
+            )
+        return Incoming(
+            key=f"tg:{raw['update_id']}",
+            platform=platform,
+            user_id=str(user["id"]),
+            chat_id=str(msg["chat"]["id"]),
+            topic=str(msg.get("message_thread_id", "")),
+            text=msg.get("text") or msg.get("caption") or "",
+            callback=(cb or {}).get("data"),
+            callback_id=(cb or {}).get("id"),
+            private=msg["chat"].get("type") == "private",
+            files=files,
+            reply_message_id=str(msg["reply_to_message"]["message_id"]) if msg.get("reply_to_message") else None,
+        )
     if platform == "max":
         cb = raw.get("callback")
         msg = raw.get("message", {})
@@ -58,12 +75,36 @@ def normalize(platform, raw):
         for a in body.get("attachments", []) if not cb else []:
             if a.get("type") in {"image", "file"}:
                 payload = a.get("payload", {})
-                files.append({"file_id": json.dumps({"url": payload.get("url"), "token": payload.get("token"), "mid": body.get("mid")}),
-                              "filename": a.get("filename", "photo.jpg" if a["type"] == "image" else "document"),
-                              "album_id": None})
-        return Incoming(key=f"max:{event_id}", platform=platform, user_id=str(user["user_id"]),
-                        chat_id=str(chat_id), topic="", text=("/start " + str(raw.get("payload") or "")) if raw.get("update_type") == "bot_started" else body.get("text", ""), callback=(cb or {}).get("payload"),
-                        callback_id=(cb or {}).get("callback_id"), private=recipient.get("chat_type") == "dialog" or raw.get("update_type") == "bot_started", files=files)
+                files.append(
+                    {
+                        "file_id": json.dumps(
+                            {"url": payload.get("url"), "token": payload.get("token"), "mid": body.get("mid")}
+                        ),
+                        "filename": a.get("filename")
+                        or payload.get("filename")
+                        or ("photo.jpg" if a["type"] == "image" else "document"),
+                        "album_id": None,
+                    }
+                )
+        return Incoming(
+            key=f"max:{event_id}",
+            platform=platform,
+            user_id=str(user["user_id"]),
+            chat_id=str(chat_id),
+            topic="",
+            text=("/start " + str(raw.get("payload") or ""))
+            if raw.get("update_type") == "bot_started"
+            else body.get("text", ""),
+            callback=(cb or {}).get("payload"),
+            callback_id=(cb or {}).get("callback_id"),
+            private=recipient.get("chat_type") == "dialog" or raw.get("update_type") == "bot_started",
+            files=files,
+            reply_message_id=(
+                (msg.get("link") or {}).get("message", {}).get("mid") or (msg.get("link") or {}).get("mid")
+            )
+            if (msg.get("link") or {}).get("type") == "reply"
+            else None,
+        )
     raise BusinessError("Неизвестный мессенджер.")
 
 
@@ -92,12 +133,20 @@ class Transport:
                 if topic:
                     data["message_thread_id"] = topic
                 if buttons:
-                    data["reply_markup"] = {"inline_keyboard": [[{"text": label, "callback_data": value}] for label, value in buttons]}
-                url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/" + ("sendDocument" if file_path else "sendMessage")
+                    data["reply_markup"] = {
+                        "inline_keyboard": [[{"text": label, "callback_data": value}] for label, value in buttons]
+                    }
+                url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/" + (
+                    "sendDocument" if file_path else "sendMessage"
+                )
                 if file_path:
                     with open(file_path, "rb") as f:
                         data = {k: json.dumps(v) if isinstance(v, dict) else v for k, v in data.items()}
-                        response = self.client.post(url, data=data, files={"document": (payload.get("filename", "material" + file_path.suffix), f)})
+                        response = self.client.post(
+                            url,
+                            data=data,
+                            files={"document": (payload.get("filename", "material" + file_path.suffix), f)},
+                        )
                 else:
                     response = self.client.post(url, json=data)
                 self._check(response)
@@ -111,24 +160,47 @@ class Transport:
                 headers = {"Authorization": self.cfg.max_token}
                 attachments = []
                 if file_path:
-                    upload = self.client.post(f"{self.cfg.max_api_url}/uploads", headers=headers, params={"type": "file"})
+                    upload = self.client.post(
+                        f"{self.cfg.max_api_url}/uploads", headers=headers, params={"type": "file"}
+                    )
                     self._check(upload)
                     from ama.files import validate_url
+
                     upload_url = upload.json()["url"]
                     validate_url(upload_url)
                     with open(file_path, "rb") as f:
-                        uploaded = self.client.post(upload_url, files={"data": (payload.get("filename", "material" + file_path.suffix), f)})
+                        uploaded = self.client.post(
+                            upload_url, files={"data": (payload.get("filename", "material" + file_path.suffix), f)}
+                        )
                     self._check(uploaded)
                     attachments.append({"type": "file", "payload": uploaded.json()})
                 if buttons:
-                    attachments.append({"type": "inline_keyboard", "payload": {"buttons": [
-                        [{"type": "callback", "text": label, "payload": value}] for label, value in buttons]}})
-                response = self.client.post(f"{self.cfg.max_api_url}/messages", params={"chat_id": chat_id}, headers=headers,
-                                            json={"text": text, "attachments": attachments, "notify": not payload.get("silent", False)})
+                    attachments.append(
+                        {
+                            "type": "inline_keyboard",
+                            "payload": {
+                                "buttons": [
+                                    [{"type": "callback", "text": label, "payload": value}] for label, value in buttons
+                                ]
+                            },
+                        }
+                    )
+                response = self.client.post(
+                    f"{self.cfg.max_api_url}/messages",
+                    params={"chat_id": chat_id},
+                    headers=headers,
+                    json={"text": text, "attachments": attachments, "notify": not payload.get("silent", False)},
+                )
                 self._check(response)
                 return str(response.json()["message"]["body"]["mid"])
             raise BusinessError("Неизвестный мессенджер.")
-        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as e:
+        except (
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.ReadError,
+            httpx.WriteError,
+            httpx.RemoteProtocolError,
+        ) as e:
             raise DeliveryUncertain("Исход отправки неизвестен; требуется сверка по чату.") from e
 
     @staticmethod
@@ -144,24 +216,41 @@ class Transport:
         if platform != "telegram":
             raise BusinessError("Темы форума доступны только в Telegram.")
         try:
-            response = self.client.post(f"https://api.telegram.org/bot{self.cfg.telegram_token}/createForumTopic",
-                                       json={"chat_id": chat_id, "name": name[:120]})
+            response = self.client.post(
+                f"https://api.telegram.org/bot{self.cfg.telegram_token}/createForumTopic",
+                json={"chat_id": chat_id, "name": name[:120]},
+            )
             self._check(response)
             data = response.json()
             if not data.get("ok"):
                 raise BusinessError("Telegram отклонил создание темы.")
             return str(data["result"]["message_thread_id"])
-        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as error:
-            raise DeliveryUncertain("Исход создания темы неизвестен; выполните сверку без автоматического повтора.") from error
+        except (
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.ReadError,
+            httpx.WriteError,
+            httpx.RemoteProtocolError,
+        ) as error:
+            raise DeliveryUncertain(
+                "Исход создания темы неизвестен; выполните сверку без автоматического повтора."
+            ) from error
 
     def answer_callback(self, platform, callback_id):
         if not callback_id:
             return
         try:
             if platform == "telegram" and self.cfg.telegram_token:
-                self.client.post(f"https://api.telegram.org/bot{self.cfg.telegram_token}/answerCallbackQuery", json={"callback_query_id": callback_id})
+                self.client.post(
+                    f"https://api.telegram.org/bot{self.cfg.telegram_token}/answerCallbackQuery",
+                    json={"callback_query_id": callback_id},
+                )
             elif platform == "max" and self.cfg.max_token:
-                self.client.post(f"{self.cfg.max_api_url}/answers", params={"callback_id": callback_id},
-                                 headers={"Authorization": self.cfg.max_token}, json={"notification": "Обработано"})
+                self.client.post(
+                    f"{self.cfg.max_api_url}/answers",
+                    params={"callback_id": callback_id},
+                    headers={"Authorization": self.cfg.max_token},
+                    json={"notification": "Обработано"},
+                )
         except httpx.HTTPError:
             pass

@@ -516,7 +516,12 @@ def receipt(db, actor, agreement_id, data):
     at = parse_date(data["received_at"])
     if at > now() or not data.get("bank_reference") or not data.get("evidence"):
         raise BusinessError("Нужны фактическое банковское подтверждение, ссылка операции и дата.")
-    if db.scalar(select(Payment.id).where(func.trim(Payment.source_key) == data["bank_reference"].strip())):
+    from ama.bank_references import lock as bank_lock, reject_legacy
+
+    reject_legacy(bank_lock(db, data["bank_reference"]))
+    if db.scalar(
+        select(Payment.id).where(func.trim(Payment.source_key) == data["bank_reference"].strip()).with_for_update()
+    ):
         raise BusinessError("Эта банковская операция уже учтена в оплате франшизы.")
     recipient = a.data.get("recipient")
     if not recipient:
@@ -524,10 +529,12 @@ def receipt(db, actor, agreement_id, data):
     # Lock one recipient record to serialize first sight of the same bank transaction.
     db.scalar(select(Record).where(Record.id == recipient["record_id"]).with_for_update())
     old = db.scalar(
-        select(FinanceReceipt).where(
+        select(FinanceReceipt)
+        .where(
             FinanceReceipt.recipient_key == recipient["recipient_key"],
             FinanceReceipt.bank_reference == data["bank_reference"].strip(),
         )
+        .with_for_update()
     )
     if old:
         if old.bot_id != settings().bot_id:
@@ -1525,7 +1532,7 @@ def extra_operation(db, actor, w, expected, action, data):
             or actor.person_id != w.executor_id
             or not active_person_role(db, actor.person_id, {"specialist", "curator", "marketing_manager"}, w)
         ):
-            raise AccessDenied("Предложение формирует назначенный исполнитель разрешённой услуги.")
+            raise AccessDenied("Платные предложения здесь не разрешены либо отсутствует назначение исполнителя.")
         if w.data.get("paid_started_at"):
             raise BusinessError(
                 "Изменение начатой оплаченной работы оформляется отдельным согласованием / договорным разбором; прежние условия сохраняются."

@@ -24,7 +24,7 @@ from ama.auth import active_person_role
 from ama.errors import BusinessError
 from ama.ui.configuration import validate_record
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 
 
 def cases():
@@ -58,7 +58,7 @@ def report(db):
     revision = (
         db.execute(text("SELECT version_num FROM alembic_version")).scalar() if "alembic_version" in tables else None
     )
-    if revision != "0010":
+    if revision != "0011":
         add("migration_required", revision or "unversioned")
     for platform in ("telegram", "max"):
         token = getattr(cfg, platform + "_token")

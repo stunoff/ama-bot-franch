@@ -66,9 +66,9 @@ POLICY_BLOCK = [f("key", "Код пункта", "key", True), f("title", "Наз
                 f("expected_result", "Ожидаемый результат", required=True), choice("executor_role", "Роль исполнителя", ROLES, True),
                 choice("reviewer_role", "Роль принимающего", ROLES, True), ref("route", "Маршрут", "record:route", True),
                 choice("mode", "Применимость", MODES, True), f("depends_on", "Коды зависимостей", "lines"),
-                f("start_event", "Событие старта", "key", True), f("date_anchor", "Опорная дата", "key"),
+                choice("start_event","Событие старта",{"project_configured":"Создан проект","dependencies_accepted":"Приняты входные результаты","manual":"Куратор применил фильтр","actual_technical":"Фактическое техническое открытие","actual_official":"Фактическое официальное открытие"},True), f("date_anchor", "Опорная дата", "key"),
                 f("materials", "Материалы", "multiref", source="record:material"),
-                f("completion_rule", "Правило завершения", required=True), f("photo_requirements", "Требования к фото", "lines")]
+                choice("result_type","Тип результата",{"manual":"Подтверждение принимающим","photo":"Обязательное фото","document":"Обязательный документ"}),f("independent_review","Независимая приёмка","bool"),f("completion_rule", "Правило завершения", required=True), f("photo_requirements", "Требования к фото", "lines")]
 RECORD_VALUES = {
     "calendar": CALENDAR,
     "material": [f("title", "Пользовательское название", required=True), choice("type", "Тип", {"link": "Ссылка", "video": "Видео", "document": "Документ", "image": "Изображение"}),
@@ -106,10 +106,7 @@ POLICIES = {
     "payment": [f("recipient_key","Устойчивый идентификатор получателя","key"),f("title", "Утверждённый получатель", required=True), f("reference", "Ссылка на защищённые реквизиты", "url", True),
                 f("services", "Применимость к услугам", "multi", True, choices={k: PURPOSES[k] for k in ["projecting", "software", "personnel", "menu", "design", "advertising", "printing", "systems_training", "smm", "reviews", "support"]}),
                 f("approval", "Основание финансового владельца", required=True), f("valid_until", "Действует до", "date")],
-    "schedule": [f("title", "Название расписания", required=True), f("event", "Существующее событие", "key", True),
-                 ref("calendar", "Календарь", "record:calendar", True), ref("binding_id", "Получатель", "binding", True),
-                 f("start_on", "Начало периода", "date", True), f("frequency", "Периодичность", required=True),
-                 f("approval", "Подтверждение владельца процесса", required=True)],
+    "schedule": [f("title","Название расписания",required=True),choice("event","Событие",{"report":"Регулярный аналитический отчёт"},True),ref("calendar","Календарь","record:calendar",True),ref("binding_id","Внутренний получатель","binding",True),f("start_at","Первый запуск","datetime",True),f("until_at","Конечная граница","datetime",True),choice("frequency","Периодичность",{"daily":"Ежедневно","weekly":"Еженедельно","monthly":"Ежемесячно"},True),choice("report","Отчёт",{"works":"Работы","summary":"Сводка","training":"Ознакомление","sales_events":"События продаж","sales_funnel":"Воронка","sales_cohort":"Когорта"},True),choice("period","Отчётный период",{"previous_day":"Предыдущий день","previous_week":"Предыдущая неделя","previous_month":"Предыдущий месяц","last_days":"Заданное число прошлых дней"},True),f("days","Число дней","int",minimum=1,maximum=366),*deepcopy(SCOPE),f("audience_approval","Подтверждение доступа всех участников чата к области отчёта",required=True),f("approval","Утверждение владельца процесса",required=True)],
     "sales_content": [f("title", "Название карточки", required=True), ref("brand_id", "Бренд", "brand", True),
         choice("category", "Раздел", {"about":"О проекте", "advantages":"Преимущества", "formats":"Форматы", "finance":"Экономика", "benefits":"Что получает партнёр", "launch":"Запуск", "menu":"Меню", "marketing":"Маркетинг", "systems":"Системы", "support":"Поддержка", "premises":"Помещение", "media":"Медиа"}, True),
         f("text", "Утверждённый текст", required=True, maximum=3500), f("public", "Разрешено показывать лиду", "bool"),
@@ -122,6 +119,11 @@ POLICIES = {
 
 
 def fields_for(kind):
+    if kind=="closure:without_confirmation":
+        return [choice("classification","Характер обращения",{"informational":"Информационное","optional":"Необязательное"},True),f("reason","Причина отсутствия подтверждения ФП",required=True),f("basis","Основание куратора",required=True),f("no_financial_obligation","Нет оплаты / финансового обязательства","bool",True)]
+    if kind=="ops:mark_test":
+        return [choice("object_kind","Тип тестовой записи",{"partner":"ФП","establishment":"Предприятие","lead":"Лид","work":"Работа"},True),f("object_id","ID записи",required=True),f("reason","Основание тестовой области",required=True)]
+
     if kind.startswith("ops:"):
         return [f("reason","Основание процедуры",required=True), *([ref("backup_id","Успешная резервная копия","operations_backup",True)] if kind=="ops:verify_restore" else [])]
 

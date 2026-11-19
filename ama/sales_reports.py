@@ -6,6 +6,7 @@ from sqlalchemy import select
 from ama.models import SalesCase, SalesEvent, Lead, Deal, now
 from ama.ui import access
 from ama.sale_flow import STAGE_LABELS
+from ama.test_data import is_test
 
 RULE_VERSION = "sales-1.0X-v1"
 
@@ -14,7 +15,7 @@ def visible(db, actor, data):
     return [
         c
         for c in db.scalars(select(SalesCase))
-        if (not data.get("brand_id") or c.brand_id == data["brand_id"])
+        if not is_test(db,c) and (not data.get("brand_id") or c.brand_id == data["brand_id"])
         and access.scope(
             db,
             actor,

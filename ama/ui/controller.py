@@ -224,6 +224,12 @@ def config_command(db, actor, obj, command, data=None, kind=None):
 
 
 def dispatch(db, actor, s, action, p):
+    if action=="close_without_confirmation_begin":
+        from ama.ui.workspace import dispatch as workspace_dispatch
+        return workspace_dispatch(db,actor,s,action,p)
+    if action.startswith("up_"):
+        from ama.intake import dispatch as intake_ui
+        return intake_ui(db,actor,s,action,p)
     if action.startswith("pub_"):
         from ama.ui.publications import dispatch as publication_ui
         return publication_ui(db,actor,s,action,p)
@@ -514,6 +520,8 @@ def dispatch(db, actor, s, action, p):
     if action == "confirm":
         d = view_draft(db, actor, p["draft_id"])
         result = business.confirm(db, actor, d, p["expected"], publish=p.get("publish", False))
+        if d.kind=="ops:mark_test":
+            return show(db,actor,s,"Запись отмечена тестовой. Связанные тестовые данные исключаются из бизнес-аналитики.",[B("Эксплуатация","ops_home")],"ops_home")
         if d.kind.startswith("ops:"):
             return show(db,actor,s,"Запрос процедуры сохранён. ID: "+result["id"]+"\nОжидает операторского runner. Копия / проверка восстановления ещё не выполнена.",[B("Журнал процедур","ops_home"),B("Настройки","settings")],"ops_home")
         if d.kind == "publication:send":

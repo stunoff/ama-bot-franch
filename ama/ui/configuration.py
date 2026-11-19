@@ -1,4 +1,5 @@
 """Versioned configuration operations used by the chat forms and protected CLI."""
+
 from copy import deepcopy
 from datetime import datetime
 from urllib.parse import urlsplit
@@ -7,12 +8,36 @@ from sqlalchemy import select, or_
 from ama.auth import active_person_role
 from ama.config import settings
 from ama.errors import BusinessError, AccessDenied
-from ama.models import (Identity, Account, Role, Entity, EstablishmentBrand, Binding, Record, Work, Training,
-                        ConfigurationRevision, Timer, Outbox, UIDraft, Inbox, Attachment, Audit, now)
+from ama.models import (
+    Identity,
+    Account,
+    Role,
+    Entity,
+    EstablishmentBrand,
+    Binding,
+    Record,
+    Work,
+    Training,
+    ConfigurationRevision,
+    Timer,
+    Outbox,
+    UIDraft,
+    Inbox,
+    Attachment,
+    Audit,
+    now,
+)
 from ama.service import versioned, parse_date, stamp, queue
 
-MODELS = {"person": Identity, "account": Account, "role": Role, "entity": Entity, "binding": Binding,
-          "record": Record, "link": EstablishmentBrand}
+MODELS = {
+    "person": Identity,
+    "account": Account,
+    "role": Role,
+    "entity": Entity,
+    "binding": Binding,
+    "record": Record,
+    "link": EstablishmentBrand,
+}
 SECRET_KEYS = {"token", "telegram_token", "max_token", "password", "secret", "api_key", "private_key", "webhook_secret"}
 
 
@@ -54,8 +79,13 @@ def validate_scope(db, data):
         e = db.get(Entity, data["establishment_id"])
         if data.get("partner_id") and e.partner_id != data["partner_id"]:
             raise BusinessError("Предприятие не принадлежит выбранному ФП.")
-        if data.get("brand_id") and not db.scalar(select(EstablishmentBrand).where(
-            EstablishmentBrand.establishment_id == e.id, EstablishmentBrand.brand_id == data["brand_id"], EstablishmentBrand.active.is_(True))):
+        if data.get("brand_id") and not db.scalar(
+            select(EstablishmentBrand).where(
+                EstablishmentBrand.establishment_id == e.id,
+                EstablishmentBrand.brand_id == data["brand_id"],
+                EstablishmentBrand.active.is_(True),
+            )
+        ):
             raise BusinessError("Бренд не подключён к выбранной площадке.")
 
 
@@ -63,6 +93,7 @@ def validate_role(db, data):
     get_person(db, data.get("person_id"))
     validate_scope(db, data)
     from ama.admin import ROLES
+
     if data.get("name") not in ROLES:
         raise BusinessError("Неизвестная роль.")
     if data["name"] in {"partner", "observer"} and not data.get("partner_id"):
@@ -74,21 +105,36 @@ def validate_role(db, data):
 
 
 def guard_last_admin(db, *, role_id=None, account_id=None):
-    roles = list(db.scalars(select(Role).where(Role.bot_id == settings().bot_id, Role.name == "admin", Role.active.is_(True)).with_for_update()))
+    roles = list(
+        db.scalars(
+            select(Role)
+            .where(Role.bot_id == settings().bot_id, Role.name == "admin", Role.active.is_(True))
+            .with_for_update()
+        )
+    )
     for r in roles:
         if r.id == role_id or r.expires_at and r.expires_at <= now():
             continue
         if any((r.partner_id, r.brand_id, r.establishment_id)):
             continue
-        if db.scalar(select(Account).where(Account.person_id == r.person_id, Account.active.is_(True),
-                                           Account.id != account_id if account_id else True)):
+        if db.scalar(
+            select(Account).where(
+                Account.person_id == r.person_id,
+                Account.active.is_(True),
+                Account.id != account_id if account_id else True,
+            )
+        ):
             return
     raise BusinessError("Нельзя отключить последнего доступного системного администратора. Сначала проверьте замену.")
 
 
 def guard_person_work(db, person_id):
-    if db.scalar(select(Work).where(Work.status != "done", or_(Work.owner_id == person_id, Work.reviewer_id == person_id,
-                                                               Work.pending_owner_id == person_id))):
+    if db.scalar(
+        select(Work).where(
+            Work.status != "done",
+            or_(Work.owner_id == person_id, Work.reviewer_id == person_id, Work.pending_owner_id == person_id),
+        )
+    ):
         raise BusinessError("Есть активные работы или приёмка. Сначала выполните явную передачу / замещение.")
 
 
@@ -116,8 +162,14 @@ def dependencies(db, rec):
 
 
 def validate_record(db, kind, value, *, published=False):
+    if kind == "policy" and published and value.get("policy_type") == "schedule" and value.get("event") == "report":
+        from ama.report_schedules import validate
+
+        validate(db, value)
+
     if kind == "policy" and published and value.get("policy_type") == "storage":
         from ama.storage_policy import validate
+
         validate(value)
 
     safe_values(value)
@@ -136,7 +188,11 @@ def validate_record(db, kind, value, *, published=False):
             raise BusinessError("Карточка продаж требует бренд, текст, владельца, дату и основание утверждения.")
         if value.get("category") == "finance" and value.get("finance_basis") not in {"terms", "model"}:
             raise BusinessError("Раздел экономики должен отделять условия франшизы от финансовой модели.")
-        if value.get("category") == "finance" and value.get("finance_basis") == "model" and not all(value.get(k) for k in ("format", "assumptions")):
+        if (
+            value.get("category") == "finance"
+            and value.get("finance_basis") == "model"
+            and not all(value.get(k) for k in ("format", "assumptions"))
+        ):
             raise BusinessError("Финансовая модель требует формат, дату и допущения расчёта.")
         for link in value.get("links", []):
             parsed = urlsplit(link.get("url", ""))
@@ -144,6 +200,7 @@ def validate_record(db, kind, value, *, published=False):
                 raise BusinessError("Материал требует безопасную HTTPS-ссылку.")
     if kind == "calendar":
         from ama.calendar import Calendar
+
         Calendar(value)
         for date in value.get("holidays", []) + value.get("extra_workdays", []):
             datetime.strptime(date, "%Y-%m-%d")
@@ -152,20 +209,37 @@ def validate_record(db, kind, value, *, published=False):
         if not cards and published:
             raise BusinessError("Для публикации добавьте карточки ознакомления.")
         for c in cards:
-            if not c.get("title") or not c.get("text") or not isinstance(c.get("module", 0), int) or not 0 <= c.get("module", 0) <= 11:
+            if (
+                not c.get("title")
+                or not c.get("text")
+                or not isinstance(c.get("module", 0), int)
+                or not 0 <= c.get("module", 0) <= 11
+            ):
                 raise BusinessError("Карточка требует название, текст и раздел 0–11.")
             for key in c.get("required_materials", []):
                 material = db.scalar(select(Record).where(Record.kind == "material", Record.key == key))
                 if not material or published and not material.published:
                     raise BusinessError(f"Обязательный материал {key} не опубликован.")
     if kind == "template":
-        permitted = {"partner_name", "brand", "brand_name", "establishment_name", "request_id", "title", "status", "due_at", "owner_name"}
+        permitted = {
+            "partner_name",
+            "brand",
+            "brand_name",
+            "establishment_name",
+            "request_id",
+            "title",
+            "status",
+            "due_at",
+            "owner_name",
+        }
         for _, name, fmt, conversion in Formatter().parse(value.get("text", "")):
             if name is not None and (name not in permitted or fmt or conversion):
                 raise BusinessError("В шаблоне есть неподдерживаемая переменная или форматирование.")
     if kind == "commercial" and published:
         if not value.get("approval") or not value.get("approved_on") or not value.get("terms"):
-            raise BusinessError("Публикация коммерческих условий требует текста, даты и основания владельца содержимого.")
+            raise BusinessError(
+                "Публикация коммерческих условий требует текста, даты и основания владельца содержимого."
+            )
         if not isinstance(value.get("required_minor"), int) or value["required_minor"] < 0:
             raise BusinessError("Укажите утверждённое условие расчёта.")
     if kind == "policy" and value.get("policy_type") == "scenario":
@@ -173,8 +247,12 @@ def validate_record(db, kind, value, *, published=False):
         keys = [b.get("key") for b in blocks]
         if not keys or not all(keys) or len(keys) != len(set(keys)):
             raise BusinessError("Пункты сценария требуют уникальные коды.")
-        graph = {b["key"]: b.get("depends_on", []) for b in blocks}
+        from ama.project_catalog import CATALOG
+
+        graph = {k: v["depends_on"] for k, v in CATALOG.items()}
+        graph.update({b["key"]: b.get("depends_on", []) for b in blocks})
         visited, visiting = set(), set()
+
         def visit(key):
             if key not in graph:
                 raise BusinessError("Зависимость ссылается на отсутствующий пункт.")
@@ -187,32 +265,74 @@ def validate_record(db, kind, value, *, published=False):
                 visit(dep)
             visiting.remove(key)
             visited.add(key)
+
         for key in graph:
             visit(key)
         for b in blocks:
-            for field in ("expected_result", "executor_role", "reviewer_role", "route", "start_event", "completion_rule"):
+            if b.get("start_event", "").lower() not in {
+                "project_configured",
+                "dependencies_accepted",
+                "result_accepted",
+                "manual",
+                "actual_technical",
+                "actual_official",
+            }:
+                raise BusinessError("Неподдерживаемое событие запуска пункта.")
+            if b.get("result_type", "manual") not in {"manual", "photo", "document"}:
+                raise BusinessError("Неподдерживаемый тип результата.")
+            if b.get("reviewer_role") not in {"curator", "marketing_manager"}:
+                raise BusinessError("Проектный результат принимает куратор либо менеджер маркетинга.")
+            if b.get("executor_role") == "admin":
+                raise BusinessError("Технический администратор не назначается исполнителем бизнес-результата.")
+            for field in (
+                "expected_result",
+                "executor_role",
+                "reviewer_role",
+                "route",
+                "start_event",
+                "completion_rule",
+            ):
                 if not b.get(field):
                     raise BusinessError("У каждого пункта нужны результат, роли, маршрут, событие и правило приёмки.")
             if published:
-                route = db.scalar(select(Record).where(Record.kind == "route", Record.key == b["route"], Record.published.is_(True)))
+                route = db.scalar(
+                    select(Record).where(Record.kind == "route", Record.key == b["route"], Record.published.is_(True))
+                )
                 if not route:
                     raise BusinessError("Маршрут пункта не опубликован.")
                 for key in b.get("materials", []):
-                    if not db.scalar(select(Record).where(Record.kind == "material", Record.key == key, Record.published.is_(True))):
+                    if not db.scalar(
+                        select(Record).where(Record.kind == "material", Record.key == key, Record.published.is_(True))
+                    ):
                         raise BusinessError("Материал пункта не опубликован.")
     if kind == "policy" and published and value.get("policy_type") == "sla":
         from ama.sla import validate_profile
+
         validate_profile(value)
-    if kind == "policy" and published and value.get("policy_type") in {"scenario", "sla", "payment", "finance_recipient", "schedule", "faq","broadcast_permission"}:
+    if (
+        kind == "policy"
+        and published
+        and value.get("policy_type")
+        in {"scenario", "sla", "payment", "finance_recipient", "schedule", "faq", "broadcast_permission"}
+    ):
         if not value.get("approval"):
             raise BusinessError("Укажите основание уполномоченного владельца процесса.")
 
 
 def revision(db, actor, kind, obj, before, reason):
     after = snapshot(obj)
-    db.add(ConfigurationRevision(object_id=obj.id, kind=kind, actor_id=actor.person_id if actor else None,
-                                  old_version=before.get("version"), new_version=after.get("version"), before=before,
-                                  after=after, reason=reason or "Защищённая первоначальная настройка"))
+    db.add(
+        ConfigurationRevision(
+            object_id=obj.id,
+            kind=kind,
+            actor_id=actor.person_id if actor else None,
+            old_version=before.get("version"),
+            new_version=after.get("version"),
+            before=before,
+            after=after,
+            reason=reason or "Защищённая первоначальная настройка",
+        )
+    )
 
 
 def bump_timers(db, w):
@@ -222,6 +342,7 @@ def bump_timers(db, w):
 
 def reviewer_roles(work):
     from ama.service import STAFF
+
     if work.kind.startswith("marketing"):
         return {"marketing_manager"}
     if work.kind in {"legal", "debt"}:
@@ -248,6 +369,7 @@ def substitute(db, actor, d):
             raise BusinessError("Исходный сотрудник не назначен на выбранную работу.")
         old = snapshot(w)
         from ama.service import STAFF
+
         for field in fields:
             allowed = reviewer_roles(w) if field == "reviewer_id" else STAFF
             if not active_person_role(db, target.id, allowed, w):
@@ -256,8 +378,22 @@ def substitute(db, actor, d):
             setattr(w, field, target.id)
         w.version += 1
         bump_timers(db, w)
-        stamp(db, actor, w, "STAFF_SUBSTITUTED", old["version"], {"from": source.id, "to": target.id, "reason": d["reason"]}, "admin")
-        queue(db, db.get(Binding, w.binding_id), f"substitution:{w.id}:{w.version}", f"Ответственный по работе «{w.title}» изменён: {source.name} → {target.name}. Срок сохранён.", work=w)
+        stamp(
+            db,
+            actor,
+            w,
+            "STAFF_SUBSTITUTED",
+            old["version"],
+            {"from": source.id, "to": target.id, "reason": d["reason"]},
+            "admin",
+        )
+        queue(
+            db,
+            db.get(Binding, w.binding_id),
+            f"substitution:{w.id}:{w.version}",
+            f"Ответственный по работе «{w.title}» изменён: {source.name} → {target.name}. Срок сохранён.",
+            work=w,
+        )
         plan.append({"work_id": w.id, "fields": fields, "from": source.id, "to": target.id})
     return {"id": source.id, "version": source.version, "plan": plan, "count": len(plan)}
 
@@ -271,23 +407,31 @@ def extra(db, actor, kind, d):
         if not d.get("evidence") or d.get("outcome") not in {"delivered", "not_delivered"}:
             raise BusinessError("Нужен проверенный исход и описание сверки.")
         if obj.status == "sending" and not d.get("worker_stopped"):
-            raise BusinessError("Перед сверкой sending остановите все воркеры, дождитесь завершения отправок и подтвердите это в форме. Обрабатывать форму можно после запуска одного воркера.")
+            raise BusinessError(
+                "Перед сверкой sending остановите все воркеры, дождитесь завершения отправок и подтвердите это в форме. Обрабатывать форму можно после запуска одного воркера."
+            )
         if d["outcome"] == "delivered":
             if not d.get("external_id"):
                 raise BusinessError("Укажите фактический ID доставленного сообщения.")
             obj.status, obj.external_id, obj.error = "sent", d["external_id"], None
             from ama import reminders
+
             reminders.on_delivered(db, obj)
             from ama.sla import delivered
+
             delivered(db, obj)
             from ama.packets import delivered as packet_delivered
-            packet_delivered(db,obj)
+
+            packet_delivered(db, obj)
             from ama.learning import delivered as learning_delivered
-            learning_delivered(db,obj)
+
+            learning_delivered(db, obj)
             from ama.finance import delivered as finance_delivered
-            finance_delivered(db,obj)
+
+            finance_delivered(db, obj)
             from ama.publications import refresh
-            refresh(db,obj)
+
+            refresh(db, obj)
             if obj.payload.get("op") == "create_topic":
                 if obj.payload.get("finance_topic") or obj.payload.get("finance_batch_topic"):
                     from ama.finance import on_topic
@@ -304,16 +448,29 @@ def extra(db, actor, kind, d):
                     b.verified = True
         else:
             obj.status, obj.error, obj.attempts, obj.retry_at = "pending", None, 0, now()
-        db.add(Audit(actor_id=actor.person_id, object_id=obj.id, action="CONFIG_DELIVERY_RECONCILED", data={"reason": d["reason"], "evidence": d["evidence"], "outcome": d["outcome"]}))
+        db.add(
+            Audit(
+                actor_id=actor.person_id,
+                object_id=obj.id,
+                action="CONFIG_DELIVERY_RECONCILED",
+                data={"reason": d["reason"], "evidence": d["evidence"], "outcome": d["outcome"]},
+            )
+        )
         return {"id": obj.id}
     if kind in {"retry_delivery", "retry_inbox", "retry_attachment", "retry_timer"}:
-        model = {"retry_delivery": Outbox, "retry_inbox": Inbox, "retry_attachment": Attachment, "retry_timer": Timer}[kind]
+        model = {"retry_delivery": Outbox, "retry_inbox": Inbox, "retry_attachment": Attachment, "retry_timer": Timer}[
+            kind
+        ]
         pk = model.key if model is Inbox else model.id
         obj = db.scalar(select(model).where(pk == d["id"]).with_for_update())
         if not obj or obj.status != d["expected_status"]:
             raise BusinessError("Состояние очереди изменилось. Обновите диагностику.")
-        allowed = {"retry_delivery": {"failed", "blocked"}, "retry_inbox": {"failed", "rejected"},
-                   "retry_attachment": {"failed"}, "retry_timer": {"blocked"}}[kind]
+        allowed = {
+            "retry_delivery": {"failed", "blocked"},
+            "retry_inbox": {"failed", "rejected"},
+            "retry_attachment": {"failed"},
+            "retry_timer": {"blocked"},
+        }[kind]
         if obj.status not in allowed:
             raise BusinessError("Повтор недопустим без сверки фактического исхода.")
         if isinstance(obj, Outbox) and obj.external_id:
@@ -325,19 +482,58 @@ def extra(db, actor, kind, d):
             obj.retry_at = now()
         if hasattr(obj, "error"):
             obj.error = None
-        db.add(Audit(actor_id=actor.person_id, object_id=d["id"], action="CONFIG_"+kind.upper(), data={"reason": d["reason"]}))
+        db.add(
+            Audit(
+                actor_id=actor.person_id,
+                object_id=d["id"],
+                action="CONFIG_" + kind.upper(),
+                data={"reason": d["reason"]},
+            )
+        )
         return {"id": d["id"]}
     if kind == "employee":
         from ama import admin
+
         person_id = d.get("person_id")
         if not person_id:
-            person_id = admin.apply(db, actor, {"type": "person", "data": {"name": d["name"], "reason": d["reason"]}}, bootstrap=actor is None)["id"]
-        admin.apply(db, actor, {"type": "account", "data": {"person_id": person_id, "platform": d["platform"], "external_id": d["external_id"], "reason": d["reason"]}}, bootstrap=actor is None)
-        result = admin.apply(db, actor, {"type": "role", "data": {**d, "person_id": person_id, "name": d["role"]}}, bootstrap=actor is None)
+            person_id = admin.apply(
+                db,
+                actor,
+                {"type": "person", "data": {"name": d["name"], "reason": d["reason"]}},
+                bootstrap=actor is None,
+            )["id"]
+        admin.apply(
+            db,
+            actor,
+            {
+                "type": "account",
+                "data": {
+                    "person_id": person_id,
+                    "platform": d["platform"],
+                    "external_id": d["external_id"],
+                    "reason": d["reason"],
+                },
+            },
+            bootstrap=actor is None,
+        )
+        result = admin.apply(
+            db,
+            actor,
+            {"type": "role", "data": {**d, "person_id": person_id, "name": d["role"]}},
+            bootstrap=actor is None,
+        )
         return {**result, "person_id": person_id}
     if kind == "substitution":
         return substitute(db, actor, d)
-    if kind in {"person_update", "account_update", "role_update", "binding_update", "link_update", "archive_record", "disable_binding"}:
+    if kind in {
+        "person_update",
+        "account_update",
+        "role_update",
+        "binding_update",
+        "link_update",
+        "archive_record",
+        "disable_binding",
+    }:
         model_kind = kind.split("_")[0]
         if kind == "archive_record":
             model_kind = "record"
@@ -356,9 +552,18 @@ def extra(db, actor, kind, d):
             obj.name = d["name"]
         elif kind == "account_update":
             if any(k in d and str(d[k]) != str(getattr(obj, k)) for k in ("person_id", "platform", "external_id")):
-                raise BusinessError("Аккаунт нельзя перепривязать другому человеку. Добавьте новый подтверждённый аккаунт.")
+                raise BusinessError(
+                    "Аккаунт нельзя перепривязать другому человеку. Добавьте новый подтверждённый аккаунт."
+                )
             if not d.get("active", True):
-                if db.scalar(select(Role).where(Role.person_id == obj.person_id, Role.name == "admin", Role.bot_id == settings().bot_id, Role.active.is_(True))):
+                if db.scalar(
+                    select(Role).where(
+                        Role.person_id == obj.person_id,
+                        Role.name == "admin",
+                        Role.bot_id == settings().bot_id,
+                        Role.active.is_(True),
+                    )
+                ):
                     guard_last_admin(db, account_id=obj.id)
                 guard_person_work(db, obj.person_id)
             obj.active = d.get("active", True)
@@ -375,7 +580,9 @@ def extra(db, actor, kind, d):
         elif kind == "binding_update":
             if obj.active:
                 raise BusinessError("Активный маршрут меняется через проверенную замену чата.")
-            if any(k in d and d[k] != getattr(obj, k) for k in ("partner_id", "brand_id", "establishment_id", "purpose")):
+            if any(
+                k in d and d[k] != getattr(obj, k) for k in ("partner_id", "brand_id", "establishment_id", "purpose")
+            ):
                 raise BusinessError("Для другой области или назначения создайте новую привязку.")
             if d.get("platform", obj.platform) not in {"telegram", "max"}:
                 raise BusinessError("Неизвестный мессенджер.")
@@ -387,7 +594,13 @@ def extra(db, actor, kind, d):
             obj.verified = False
         elif kind == "link_update":
             if not d.get("active", True):
-                if db.scalar(select(Work).where(Work.establishment_id == obj.establishment_id, Work.brand_id == obj.brand_id, Work.status != "done")):
+                if db.scalar(
+                    select(Work).where(
+                        Work.establishment_id == obj.establishment_id,
+                        Work.brand_id == obj.brand_id,
+                        Work.status != "done",
+                    )
+                ):
                     raise BusinessError("Связь имеет активные работы: сначала обработайте их явно.")
             obj.active = d.get("active", True)
         elif kind == "archive_record":
@@ -396,10 +609,22 @@ def extra(db, actor, kind, d):
                 raise BusinessError("Архивация заблокирована зависимостями: " + "; ".join(deps[:8]))
             obj.published = False
         elif kind == "disable_binding":
-            if obj.purpose == "management" and not db.scalar(select(Binding).where(
-                Binding.bot_id == settings().bot_id, Binding.id != obj.id, Binding.purpose == "management", Binding.active.is_(True), Binding.verified.is_(True))):
+            if obj.purpose == "management" and not db.scalar(
+                select(Binding).where(
+                    Binding.bot_id == settings().bot_id,
+                    Binding.id != obj.id,
+                    Binding.purpose == "management",
+                    Binding.active.is_(True),
+                    Binding.verified.is_(True),
+                )
+            ):
                 raise BusinessError("Основной управляющий маршрут нельзя отключить без проверенной замены.")
-            if db.scalar(select(Work).where(Work.status != "done", or_(Work.binding_id == obj.id, Work.client_binding_id == obj.id, Work.pending_binding_id == obj.id))):
+            if db.scalar(
+                select(Work).where(
+                    Work.status != "done",
+                    or_(Work.binding_id == obj.id, Work.client_binding_id == obj.id, Work.pending_binding_id == obj.id),
+                )
+            ):
                 raise BusinessError("Есть открытые работы. Используйте перенос привязки.")
             obj.active, obj.active_client_key = False, None
         obj.version += 1
@@ -414,6 +639,7 @@ def extra(db, actor, kind, d):
 def complete_substitution(db, draft):
     """Return temporary assignments safely; never leave work without a valid owner."""
     from ama.service import STAFF
+
     attention = []
     for entry in draft.data.get("applied_plan", []):
         w = db.scalar(select(Work).where(Work.id == entry["work_id"]).with_for_update())
@@ -422,7 +648,10 @@ def complete_substitution(db, draft):
         fields = [k for k in entry["fields"] if getattr(w, k) == entry["to"]]
         if not fields:
             continue
-        if any(not active_person_role(db, entry["from"], reviewer_roles(w) if key == "reviewer_id" else STAFF, w) for key in fields):
+        if any(
+            not active_person_role(db, entry["from"], reviewer_roles(w) if key == "reviewer_id" else STAFF, w)
+            for key in fields
+        ):
             attention.append(w.id)
             continue
         old = w.version
@@ -431,15 +660,38 @@ def complete_substitution(db, draft):
         w.version += 1
         bump_timers(db, w)
         stamp(db, None, w, "SUBSTITUTION_RETURNED", old, {"draft_id": draft.id})
-        queue(db, db.get(Binding, w.binding_id), f"substitution-return:{draft.id}:{w.id}", f"Замещение по работе «{w.title}» завершено; прежние сроки сохранены.", work=w)
+        queue(
+            db,
+            db.get(Binding, w.binding_id),
+            f"substitution-return:{draft.id}:{w.id}",
+            f"Замещение по работе «{w.title}» завершено; прежние сроки сохранены.",
+            work=w,
+        )
     if attention:
-        for b in db.scalars(select(Binding).where(Binding.bot_id == settings().bot_id, Binding.purpose == "management", Binding.active.is_(True), Binding.verified.is_(True))):
-            queue(db, b, f"substitution-attention:{draft.id}:{b.id}", "Нужна подтверждённая замена ответственного после окончания замещения. Текущий владелец сохранён. Работ: " + str(len(attention)))
+        for b in db.scalars(
+            select(Binding).where(
+                Binding.bot_id == settings().bot_id,
+                Binding.purpose == "management",
+                Binding.active.is_(True),
+                Binding.verified.is_(True),
+            )
+        ):
+            queue(
+                db,
+                b,
+                f"substitution-attention:{draft.id}:{b.id}",
+                "Нужна подтверждённая замена ответственного после окончания замещения. Текущий владелец сохранён. Работ: "
+                + str(len(attention)),
+            )
     draft.status = "attention" if attention else "returned"
 
 
 def substitution_step(db):
-    for draft in db.scalars(select(UIDraft).where(UIDraft.kind == "substitution", UIDraft.status == "applied").with_for_update(skip_locked=True)):
+    for draft in db.scalars(
+        select(UIDraft)
+        .where(UIDraft.kind == "substitution", UIDraft.status == "applied")
+        .with_for_update(skip_locked=True)
+    ):
         if draft.data.get("expires_at") and parse_date(draft.data["expires_at"]) <= now():
             complete_substitution(db, draft)
             return True

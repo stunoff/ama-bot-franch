@@ -907,3 +907,54 @@ class OperationsJob(Base):
 class OperationsMutex(Base):
     __tablename__ = "operations_mutex"
     bot_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class BankReferenceGuard(Base):
+    __tablename__ = "bank_reference_guards"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    bot_id: Mapped[str] = mapped_column(String(64), index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class IntakeFile(Base):
+    __tablename__ = "intake_files"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    source_key: Mapped[str] = mapped_column(String(180), unique=True)
+    bot_id: Mapped[str] = mapped_column(String(64), index=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    binding_id: Mapped[str] = mapped_column(ForeignKey("chat_bindings.id"))
+    binding_version: Mapped[int] = mapped_column(Integer)
+    dialog_id: Mapped[str | None] = mapped_column(ForeignKey("dialogs.id"), nullable=True)
+    work_id: Mapped[str | None] = mapped_column(ForeignKey("works.id"), nullable=True)
+    platform: Mapped[str] = mapped_column(String(16))
+    file_id: Mapped[str] = mapped_column(Text)
+    filename: Mapped[str] = mapped_column(String(250))
+    album_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class BrandAccessNotice(Base):
+    __tablename__ = "brand_access_notices"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    bot_id: Mapped[str] = mapped_column(String(64), index=True)
+    link_id: Mapped[str] = mapped_column(ForeignKey("establishment_brands.id"))
+    link_version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ReportPlan(Base):
+    __tablename__ = "report_plans"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    record_id: Mapped[str] = mapped_column(ForeignKey("configuration.id"), unique=True)
+    record_version: Mapped[int] = mapped_column(Integer)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)

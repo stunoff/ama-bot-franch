@@ -4,15 +4,21 @@ from sqlalchemy import select, func
 from ama.auth import Actor, identify
 from ama.calendar import Calendar
 from ama.errors import BusinessError, AccessDenied, Conflict
-from ama.models import (Work, Attachment, Binding, Training, Role, Record, Lead, Deal, Payment,
-                        Outbox, now)
+from ama.models import Work, Attachment, Binding, Training, Role, Record, Lead, Deal, Payment, Outbox, now
 from ama.service import transition, attach, training_action, create_work
 from ama import admin, sales, broadcasts, projects, operations
 
 
 def act(c, actor, action, data=None, version=None, key=None):
-    return transition(c.db, actor, c.w.id, version if version is not None else c.w.version,
-                      action, data or {}, key or f"{action}:{c.w.version}")
+    return transition(
+        c.db,
+        actor,
+        c.w.id,
+        version if version is not None else c.w.version,
+        action,
+        data or {},
+        key or f"{action}:{c.w.version}",
+    )
 
 
 def test_submission_is_not_acceptance(ctx):
@@ -95,7 +101,12 @@ def test_wait_requires_control_point(ctx):
 def test_deadline_never_erases_original(ctx):
     ctx.w.owner_id = "curator"
     original = ctx.w.original_due_at
-    act(ctx, ctx.curator, "wait_external", {"party": "Банк", "required": "Ответ", "next_check": "2030-01-01T12:00:00+03:00"})
+    act(
+        ctx,
+        ctx.curator,
+        "wait_external",
+        {"party": "Банк", "required": "Ответ", "next_check": "2030-01-01T12:00:00+03:00"},
+    )
     assert ctx.w.original_due_at == original
 
 
@@ -123,7 +134,15 @@ def test_training_missing_material_preserves_progress(ctx):
 
 
 def test_calendar_friday_holiday():
-    cal = Calendar({"timezone": "Europe/Moscow", "weekdays": [0, 1, 2, 3, 4], "start": "11:00", "end": "20:00", "holidays": ["2026-11-16"]})
+    cal = Calendar(
+        {
+            "timezone": "Europe/Moscow",
+            "weekdays": [0, 1, 2, 3, 4],
+            "start": "11:00",
+            "end": "20:00",
+            "holidays": ["2026-11-16"],
+        }
+    )
     # Пятница 19:30 МСК + 1 рабочий час -> вторник 11:30 МСК.
     assert cal.add_minutes(datetime(2026, 11, 13, 16, 30), 60) == datetime(2026, 11, 17, 8, 30)
 
@@ -155,17 +174,45 @@ def test_unverified_route_cannot_activate(ctx):
 
 
 def test_client_request_uses_configured_owner(ctx):
-    w = create_work(ctx.db, ctx.fp, {"title": "Помогите", "kind": "support", "owner_id": "admin", "reviewer_id": "admin"}, "request1")
+    w = create_work(
+        ctx.db,
+        ctx.fp,
+        {"title": "Помогите", "kind": "support", "owner_id": "admin", "reviewer_id": "admin"},
+        "request1",
+    )
     assert w.owner_id == "curator" and w.reviewer_id == "curator" and w.partner_id == "partner"
     assert create_work(ctx.db, ctx.fp, {"title": "Дубль"}, "request1").id == w.id
 
 
 def test_existing_scenario_creates_no_fictional_opening(ctx):
-    result = projects.configure(ctx.db, ctx.curator, {"partner_id": "partner", "establishment_id": "est", "scenario": "existing", "confirmed": True, "project_id": "p1", "blocks": []}, "project")
+    result = projects.configure(
+        ctx.db,
+        ctx.curator,
+        {
+            "partner_id": "partner",
+            "establishment_id": "est",
+            "scenario": "existing",
+            "confirmed": True,
+            "project_id": "p1",
+            "blocks": [],
+        },
+        "project",
+    )
     assert result["works"] == []
     with pytest.raises(BusinessError):
-        projects.configure(ctx.db, ctx.curator, {"partner_id": "partner", "establishment_id": "est", "scenario": "existing", "confirmed": True,
-                           "project_id": "p1", "blocks": [{"key": "technical_opening", "mode": "perform"}]}, "project")
+        projects.configure(
+            ctx.db,
+            ctx.curator,
+            {
+                "partner_id": "partner",
+                "establishment_id": "est",
+                "scenario": "existing",
+                "confirmed": True,
+                "project_id": "p1",
+                "blocks": [{"key": "technical_opening", "mode": "perform"}],
+            },
+            "project",
+        )
 
 
 def test_refusal_survives_reentry(ctx):
@@ -184,11 +231,21 @@ def test_contract_requires_current_signature_and_verified_money(ctx):
     deal = Deal(lead_id=lead.id, required_minor=10000, data={})
     ctx.db.add(deal)
     ctx.db.flush()
-    sales.contract_action(ctx.db, ctx.contract, deal.id, deal.version, "payment", {"amount_minor": 10000, "bank_reference": "bank1"}, "pay")
+    sales.contract_action(
+        ctx.db,
+        ctx.contract,
+        deal.id,
+        deal.version,
+        "payment",
+        {"amount_minor": 10000, "bank_reference": "bank1"},
+        "pay",
+    )
     with pytest.raises(BusinessError):
         sales.contract_action(ctx.db, ctx.contract, deal.id, deal.version, "confirm", {}, "confirm")
     sales.contract_action(ctx.db, ctx.contract, deal.id, deal.version, "signed", {"evidence": "ЭДО"}, "sign")
-    sales.contract_action(ctx.db, ctx.contract, deal.id, deal.version, "package", {"document_reference": "v2"}, "package")
+    sales.contract_action(
+        ctx.db, ctx.contract, deal.id, deal.version, "package", {"document_reference": "v2"}, "package"
+    )
     with pytest.raises(BusinessError):
         sales.contract_action(ctx.db, ctx.contract, deal.id, deal.version, "confirm", {}, "confirm2")
     sales.contract_action(ctx.db, ctx.contract, deal.id, deal.version, "signed", {"evidence": "ЭДО v2"}, "sign2")
@@ -204,7 +261,13 @@ def test_admin_cannot_confirm_payment(ctx):
 
 def test_cohort_does_not_include_old_success(ctx):
     for i, created in enumerate([datetime(2026, 9, 1), datetime(2026, 10, 3), datetime(2026, 10, 4)]):
-        lead = Lead(person_id=["other", "fp", "observer"][i], source="test", consent_at=now(), consent_version="v1", created_at=created)
+        lead = Lead(
+            person_id=["other", "fp", "observer"][i],
+            source="test",
+            consent_at=now(),
+            consent_version="v1",
+            created_at=created,
+        )
         ctx.db.add(lead)
         ctx.db.flush()
         if i == 0:
@@ -215,10 +278,30 @@ def test_cohort_does_not_include_old_success(ctx):
 
 
 def test_broadcast_one_message_per_brand_chat(ctx):
-    ctx.marketing=Actor("marketing","marketing")
-    ctx.db.add(Record(kind="policy",key="permission-marketing",published=True,data={"policy_type":"broadcast_permission","person_id":"marketing","brand_ids":["brand"],"allow_general":False,"approval":"Назначено администратором"}))
-    partner = ctx.db.get(__import__('ama.models', fromlist=['Entity']).Entity, "partner")
-    partner.data = {"notification_window": {"timezone": "Europe/Moscow", "weekdays": [0, 1, 2, 3, 4], "start": "11:00", "end": "20:00"}}
+    ctx.marketing = Actor("marketing", "marketing")
+    ctx.db.add(
+        Record(
+            kind="policy",
+            key="permission-marketing",
+            published=True,
+            data={
+                "policy_type": "broadcast_permission",
+                "person_id": "marketing",
+                "brand_ids": ["brand"],
+                "allow_general": False,
+                "approval": "Назначено администратором",
+            },
+        )
+    )
+    partner = ctx.db.get(__import__("ama.models", fromlist=["Entity"]).Entity, "partner")
+    partner.data = {
+        "notification_window": {
+            "timezone": "Europe/Moscow",
+            "weekdays": [0, 1, 2, 3, 4],
+            "start": "11:00",
+            "end": "20:00",
+        }
+    }
     ctx.db.flush()
     b = broadcasts.preview(ctx.db, ctx.marketing, "Новость", "brand")
     broadcasts.publish(ctx.db, ctx.marketing, b.id, b.version)
@@ -228,21 +311,73 @@ def test_broadcast_one_message_per_brand_chat(ctx):
 
 
 def test_paid_work_starts_by_approved_partner_rule(ctx):
-    ctx.w.kind, ctx.w.owner_id, ctx.w.executor_id = "paid_work", "curator", "curator"
+    ctx.w.kind, ctx.w.owner_id, ctx.w.executor_id = "paid_work", "specialist", "specialist"
     ctx.w.binding_id = "design"
-    operations.operation(ctx.db, Actor("curator", "design"), "work", ctx.w.version, "offer", {
-        "scope": "Дизайн", "amount_minor": 5000, "valid_until": "2030-01-01T12:00:00+03:00",
-        "deadline": "2030-02-01T12:00:00+03:00", "start_rule": "partner_payment_evidence"})
-    with pytest.raises(BusinessError):
-        operations.operation(ctx.db, ctx.fp, "work", ctx.w.version, "offer_accept", {"offer_version": 1, "amount_minor": 4000, "evidence": "Скрин"})
-    operations.operation(ctx.db, ctx.fp, "work", ctx.w.version, "offer_accept", {"offer_version": 1, "amount_minor": 5000, "evidence": "Подтверждение"})
+    policy = Record(
+        kind="policy",
+        key="approved-design-payment",
+        owner_id="contract",
+        published=True,
+        data={
+            "policy_type": "payment",
+            "recipient_key": "approved-design",
+            "services": ["design"],
+            "reference": "https://example.org/requisites",
+            "approval": "Утверждено",
+        },
+    )
+    ctx.db.add(policy)
+    ctx.db.flush()
+    operations.operation(
+        ctx.db,
+        Actor("specialist", "design"),
+        "work",
+        ctx.w.version,
+        "offer",
+        {
+            "payment_policy": policy.id,
+            "scope": "Дизайн",
+            "amount_minor": 5000,
+            "valid_until": "2030-01-01T12:00:00+03:00",
+            "deadline": "2030-02-01T12:00:00+03:00",
+            "start_rule": "partner_payment_evidence",
+        },
+    )
+    operations.operation(
+        ctx.db,
+        ctx.fp,
+        "work",
+        ctx.w.version,
+        "offer_accept",
+        {"offer_version": 1, "amount_minor": 4000, "evidence": "Скрин"},
+    )
+    assert ctx.w.status == "waiting_uk" and not ctx.w.data.get("paid_started_at")
+    operations.operation(
+        ctx.db,
+        ctx.fp,
+        "work",
+        ctx.w.version,
+        "offer_accept",
+        {"offer_version": 1, "amount_minor": 5000, "evidence": "Подтверждение"},
+    )
     assert ctx.w.status == "in_progress" and ctx.w.data["paid_started_at"]
 
 
 def test_care_required_without_call_center(ctx):
     ctx.w.kind, ctx.w.executor_id, ctx.w.owner_id = "digital", "specialist", "specialist"
-    operations.operation(ctx.db, ctx.specialist, "work", ctx.w.version, "passport", {"call_center_applicable": False, "systems": ["iiko"],
-                         "work_phone_messenger": "max", "management_messenger": "telegram"})
+    operations.operation(
+        ctx.db,
+        ctx.specialist,
+        "work",
+        ctx.w.version,
+        "passport",
+        {
+            "call_center_applicable": False,
+            "systems": ["iiko"],
+            "work_phone_messenger": "max",
+            "management_messenger": "telegram",
+        },
+    )
     assert "care" in ctx.w.data["required_components"] and "call_center" not in ctx.w.data["required_components"]
     with pytest.raises(BusinessError, match="цифровые"):
         ctx.w.status = "in_progress"
@@ -257,7 +392,9 @@ def test_opening_requires_personal_training(ctx):
 
 def test_chat_migration_keeps_work_and_deadline(ctx):
     old_due = ctx.w.due_at
-    admin.apply(ctx.db, ctx.admin, {"type": "replace_binding", "data": {"old_id": "support", "new_id": "new", "version": 1}})
+    admin.apply(
+        ctx.db, ctx.admin, {"type": "replace_binding", "data": {"old_id": "support", "new_id": "new", "version": 1}}
+    )
     assert ctx.w.binding_id == "new" and ctx.w.due_at == old_due and ctx.w.id == "work"
     with pytest.raises(AccessDenied):
         identify(ctx.db, "telegram", "curator", "support")
@@ -266,6 +403,7 @@ def test_chat_migration_keeps_work_and_deadline(ctx):
 def test_request_wizard_preserves_scope_and_rejects_old_button(ctx):
     from ama import wizard
     from ama.models import Dialog
+
     wizard.start(ctx.db, ctx.fp)
     f = ctx.db.scalar(select(Dialog))
     first_version = f.version
@@ -286,6 +424,7 @@ def test_request_wizard_preserves_scope_and_rejects_old_button(ctx):
 def test_wizard_cannot_be_completed_by_other_person(ctx):
     from ama import wizard
     from ama.models import Dialog
+
     wizard.start(ctx.db, ctx.fp)
     f = ctx.db.scalar(select(Dialog))
     with pytest.raises(AccessDenied):
@@ -307,10 +446,15 @@ def test_paid_offer_forbidden_in_support_queue(ctx):
 def test_lead_reminder_limit_is_not_reset_by_bot(ctx):
     from ama import reminders
     from ama.models import LeadTouch
+
     calendar = ctx.db.scalar(select(Record).where(Record.kind == "calendar", Record.key == "support"))
     ctx.db.add(Record(kind="calendar", key="sales", data=calendar.data, published=True))
     for n in (1, 2):
-        ctx.db.add(Record(kind="template", key=f"lead.consultant_reply.{n}", data={"text": "Удобно продолжить?"}, published=True))
+        ctx.db.add(
+            Record(
+                kind="template", key=f"lead.consultant_reply.{n}", data={"text": "Удобно продолжить?"}, published=True
+            )
+        )
     lead = Lead(person_id="other", source="bot", consent_at=now(), consent_version="v1", data={})
     ctx.db.add(lead)
     ctx.db.flush()
@@ -319,7 +463,9 @@ def test_lead_reminder_limit_is_not_reset_by_bot(ctx):
     ctx.db.flush()
     assert reminders.schedule(ctx.db, lead, "consultant_reply").id == t.id
     t.status = "queued"
-    msg = Outbox(dedupe_key="touch1", platform="telegram", chat_id="other", payload={"lead_id": lead.id, "lead_touch_id": t.id})
+    msg = Outbox(
+        dedupe_key="touch1", platform="telegram", chat_id="other", payload={"lead_id": lead.id, "lead_touch_id": t.id}
+    )
     reminders.on_delivered(ctx.db, msg)
     ctx.db.flush()
     second = ctx.db.scalar(select(LeadTouch).where(LeadTouch.ordinal == 2))
@@ -334,13 +480,25 @@ def test_lead_reminder_limit_is_not_reset_by_bot(ctx):
 def test_lead_reply_cancels_queued_reminder(ctx):
     from ama import reminders
     from ama.models import LeadTouch
-    lead = Lead(person_id="other", source="bot", consent_at=now(), consent_version="v1", data={"silence": {"epoch": "old", "sent": 1}})
+
+    lead = Lead(
+        person_id="other",
+        source="bot",
+        consent_at=now(),
+        consent_version="v1",
+        data={"silence": {"epoch": "old", "sent": 1}},
+    )
     ctx.db.add(lead)
     ctx.db.flush()
     touch = LeadTouch(lead_id=lead.id, epoch="old", ordinal=2, reason="materials", due_at=now(), status="queued")
     ctx.db.add(touch)
     ctx.db.flush()
-    msg = Outbox(dedupe_key="queued", platform="telegram", chat_id="other", payload={"lead_id": lead.id, "lead_touch_id": touch.id})
+    msg = Outbox(
+        dedupe_key="queued",
+        platform="telegram",
+        chat_id="other",
+        payload={"lead_id": lead.id, "lead_touch_id": touch.id},
+    )
     ctx.db.add(msg)
     ctx.db.flush()
     reminders.react(ctx.db, lead)

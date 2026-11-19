@@ -9,6 +9,7 @@ def fields(action):
             ref("establishment_id", "Предприятие", "establishment", True),
             ref("brand_id", "Бренд", "brand", True),
             choice("scenario", "Ситуация", SCENARIOS, True),
+            ref("scenario_template","Опубликованный шаблон (если несколько)","record:policy"),
             ref("marketing_manager_id", "Назначенный менеджер маркетинга", "person"),
             ref("partner_person_id", "Уполномоченный ФП", "partner_person"),
             ref("client_binding_id", "Клиентский чат", "client_binding"),
@@ -120,6 +121,7 @@ def fields(action):
                     "confirm_receipt": "ФП подтвердил получение всего комплекта",
                     "smm_period": "Согласованный период SMM и отчёт",
                     "community_ready": "Принять готовое сообщество VK",
+                    "bank_form":"Форма ИП/ООО для банка","bank_sent":"Форма передана специалистом в банк","bank_result":"Результат открытия счёта подтверждён","tax_regime":"Подтверждённый налоговый режим",
                 },
                 True,
             ),
@@ -147,5 +149,6 @@ def fields(action):
             f("admin_access", "Проверенные права администрирования"),
             f("guest_care_owner", "Ответственный за сообщения гостей"),
             f("report", "Отчёт завершённого периода"),
+            choice("company_type","Организационная форма",{"ip":"ИП","llc":"ООО"}),f("company_name","Наименование ИП/ООО"),f("inn","ИНН"),f("ogrn","ОГРНИП / ОГРН"),f("contact_name","Контактное лицо"),f("phone","Телефон +код"),f("consent_evidence","Подтверждение согласия ФП на передачу контакта"),f("form_version","Версия формы","int",minimum=1),f("next_check","Следующая проверка","datetime"),f("at","Фактическая дата отправки","datetime"),choice("regime","Налоговый режим",{"usn":"УСН","psn":"ПСН","other":"Иной подтверждённый","consultation":"Нужна консультация"}),
         ]
     return []

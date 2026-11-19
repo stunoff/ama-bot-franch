@@ -342,11 +342,14 @@ def contract_action(db, actor, deal_id, expected, action, data, event_key):
         source = data["bank_reference"].strip()
         if not source:
             raise BusinessError("Нужен уникальный банковский идентификатор.")
+        from ama.bank_references import lock as bank_lock, reject_legacy
+
+        reject_legacy(bank_lock(db, source))
         from ama.models import FinanceReceipt
 
-        if db.scalar(select(FinanceReceipt.id).where(FinanceReceipt.bank_reference == source)):
+        if db.scalar(select(FinanceReceipt.id).where(FinanceReceipt.bank_reference == source).with_for_update()):
             raise BusinessError("Банковская операция уже учтена в реестре обязательств.")
-        if db.scalar(select(Payment).where(func.trim(Payment.source_key) == source)):
+        if db.scalar(select(Payment).where(func.trim(Payment.source_key) == source).with_for_update()):
             raise BusinessError("Банковская операция уже учтена.")
         db.add(
             Payment(deal_id=deal.id, source_key=source, amount_minor=data["amount_minor"], confirmed_by=actor.person_id)
@@ -440,19 +443,20 @@ def contract_action(db, actor, deal_id, expected, action, data, event_key):
 
 
 def cohort_report(db, start, end):
-    cohort = list(db.scalars(select(Lead).where(Lead.created_at >= start, Lead.created_at < end)))
-    ids = [lead.id for lead in cohort]
-    won_cohort = db.scalar(
-        select(func.count(func.distinct(Deal.lead_id)))
-        .select_from(Deal)
-        .where(Deal.lead_id.in_(ids), Deal.successful_at.is_not(None))
-    )
-    period_wins = db.scalar(
-        select(func.count()).select_from(Deal).where(Deal.successful_at >= start, Deal.successful_at < end)
-    )
+    from ama.test_data import is_test
+
+    cohort = [
+        lead
+        for lead in db.scalars(select(Lead).where(Lead.created_at >= start, Lead.created_at < end))
+        if not is_test(db, lead)
+    ]
+    ids = {lead.id for lead in cohort}
+    deals = [d for d in db.scalars(select(Deal)) if not is_test(db, d)]
+    won = {d.lead_id for d in deals if d.lead_id in ids and d.successful_at}
+    period_wins = sum(bool(d.successful_at and start <= d.successful_at < end) for d in deals)
     return {
         "cohort_leads": len(ids),
-        "cohort_won": won_cohort,
+        "cohort_won": len(won),
         "period_wins": period_wins,
-        "cohort_conversion": won_cohort / len(ids) if ids else 0,
+        "cohort_conversion": len(won) / len(ids) if ids else 0,
     }

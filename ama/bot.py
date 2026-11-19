@@ -5,13 +5,21 @@ from sqlalchemy import select
 from ama.adapters import normalize
 from ama.auth import identify, require, roles_for
 from ama.errors import BusinessError, AccessDenied, RetryLater
-from ama.models import (Binding, Work, Outbox, Record, Entity, Account, Identity, Lead, Attachment,
-                        EstablishmentBrand)
+from ama.models import Binding, Work, Outbox, Record, Entity, Account, Identity, Lead, Attachment, EstablishmentBrand
 from ama.service import queue, create_work, transition, attach, STATUSES
 from ama import admin, sales, projects, broadcasts, operations, wizard, reminders
 
-MENU = [["Предприятия", "af:enterprises"], ["Мои задачи", "af:tasks"], ["Ознакомление", "af:training"],
-        ["База знаний", "af:knowledge"], ["Задать вопрос", "af:new"], ["Мои проекты", "af:projects"], ["Сетевые обновления", "af:packets"], ["Цифровое подключение", "af:digital"], ["Помощь", "af:help"]]
+MENU = [
+    ["Предприятия", "af:enterprises"],
+    ["Мои задачи", "af:tasks"],
+    ["Ознакомление", "af:training"],
+    ["База знаний", "af:knowledge"],
+    ["Задать вопрос", "af:new"],
+    ["Мои проекты", "af:projects"],
+    ["Сетевые обновления", "af:packets"],
+    ["Цифровое подключение", "af:digital"],
+    ["Помощь", "af:help"],
+]
 HELP = """АМА Франчайзинг
 /start — меню; /tasks — задачи; /enterprises — предприятия
 /training — персональное ознакомление; /knowledge — материалы
@@ -25,14 +33,27 @@ HELP = """АМА Франчайзинг
 
 
 def send(db, event, text, buttons=None, suffix="answer"):
-    binding = db.scalar(select(Binding).where(Binding.bot_id == settings().bot_id, Binding.platform == event.platform, Binding.chat_id == event.chat_id,
-                                             Binding.topic_key == event.topic))
-    chunks = [text[i:i + 3500] for i in range(0, len(text), 3500)] or [""]
+    binding = db.scalar(
+        select(Binding).where(
+            Binding.bot_id == settings().bot_id,
+            Binding.platform == event.platform,
+            Binding.chat_id == event.chat_id,
+            Binding.topic_key == event.topic,
+        )
+    )
+    chunks = [text[i : i + 3500] for i in range(0, len(text), 3500)] or [""]
     for i, chunk in enumerate(chunks):
-        db.add(Outbox(dedupe_key=f"reply:{event.key}:{suffix}:{i}", platform=event.platform, chat_id=event.chat_id,
-                      topic_key=event.topic, binding_id=binding.id if binding else None,
-                      binding_version=binding.version if binding else None,
-                      payload={"text": chunk, "buttons": (buttons or []) if i == len(chunks) - 1 else []}))
+        db.add(
+            Outbox(
+                dedupe_key=f"reply:{event.key}:{suffix}:{i}",
+                platform=event.platform,
+                chat_id=event.chat_id,
+                topic_key=event.topic,
+                binding_id=binding.id if binding else None,
+                binding_version=binding.version if binding else None,
+                payload={"text": chunk, "buttons": (buttons or []) if i == len(chunks) - 1 else []},
+            )
+        )
 
 
 def json_arg(text):
@@ -57,8 +78,8 @@ def card(db, actor, w):
         if w.status in {"in_progress", "rework", "materials"}:
             buttons.append(["Результат готов", f"af:a:{w.id}:{w.version}:submit"])
     if actor.person_id == w.reviewer_id and w.status == "review":
-        if actor.person_id==w.partner_person_id and w.data.get("partner_request"):
-            buttons.append(["Проблема не решена…",f"af:return:{w.id}"])
+        if actor.person_id == w.partner_person_id and w.data.get("partner_request"):
+            buttons.append(["Проблема не решена…", f"af:return:{w.id}"])
         buttons.append(["Принять", f"af:a:{w.id}:{w.version}:accept"])
     if actor.person_id == w.pending_owner_id and actor.binding_id == w.pending_binding_id:
         buttons.append(["Принять передачу", f"af:a:{w.id}:{w.version}:handoff_accept"])
@@ -79,8 +100,12 @@ def public_entry(db, event):
         send(db, event, "Приём заявок ещё не активирован: владелец не опубликовал согласие на обработку данных.")
         return
     if event.callback != f"af:consent:{consent.key}":
-        send(db, event, consent.data["text"] + "\n" + consent.data["privacy_url"],
-             [["Согласен, продолжить", f"af:consent:{consent.key}"]])
+        send(
+            db,
+            event,
+            consent.data["text"] + "\n" + consent.data["privacy_url"],
+            [["Согласен, продолжить", f"af:consent:{consent.key}"]],
+        )
         return
     account = db.scalar(select(Account).where(Account.platform == event.platform, Account.external_id == event.user_id))
     if account and not account.active:
@@ -94,11 +119,22 @@ def public_entry(db, event):
         db.flush()
     lead = sales.lead_entry(db, account.person_id, "bot", consent.key)
     reminders.react(db, lead, {"platform": event.platform, "chat_id": event.chat_id})
-    route = db.scalar(select(Binding).where(Binding.purpose == "sales", Binding.active.is_(True), Binding.verified.is_(True)))
+    route = db.scalar(
+        select(Binding).where(Binding.purpose == "sales", Binding.active.is_(True), Binding.verified.is_(True))
+    )
     if route:
-        queue(db, route, f"lead:{lead.id}", f"Новый лид {lead.id}. Для принятия: /sales " +
-              json.dumps({"id": lead.id, "version": lead.version, "action": "take"}, ensure_ascii=False))
-    send(db, event, "Согласие сохранено. Напишите имя, контакт, город и интересующий бренд; консультант продолжит диалог.")
+        queue(
+            db,
+            route,
+            f"lead:{lead.id}",
+            f"Новый лид {lead.id}. Для принятия: /sales "
+            + json.dumps({"id": lead.id, "version": lead.version, "action": "take"}, ensure_ascii=False),
+        )
+    send(
+        db,
+        event,
+        "Согласие сохранено. Напишите имя, контакт, город и интересующий бренд; консультант продолжит диалог.",
+    )
 
 
 def handle_lead_message(db, event, account):
@@ -107,6 +143,7 @@ def handle_lead_message(db, event, account):
         return public_entry(db, event)
     # Содержательное сообщение отменяет будущие касания, но явный отказ сам не снимает.
     from ama.models import now
+
     if event.text in {"/start", "/menu"}:
         send(db, event, "Напишите вопрос или /stop, чтобы прекратить контакты.")
         return
@@ -116,10 +153,16 @@ def handle_lead_message(db, event, account):
         lead.no_contact, lead.result = True, "refused"
         send(db, event, "Автоматические контакты отключены.")
         return
-    route = db.scalar(select(Binding).where(Binding.purpose == "sales", Binding.active.is_(True), Binding.verified.is_(True)))
+    route = db.scalar(
+        select(Binding).where(Binding.purpose == "sales", Binding.active.is_(True), Binding.verified.is_(True))
+    )
     if route:
         queue(db, route, f"lead-message:{event.key}", f"Лид {lead.id}:\n{event.text[:3000]}")
-    send(db, event, "Сообщение сохранено для консультанта." if route else "Сообщение получено. Продажи временно не подключены.")
+    send(
+        db,
+        event,
+        "Сообщение сохранено для консультанта." if route else "Сообщение получено. Продажи временно не подключены.",
+    )
 
 
 def handle(db, platform, raw):
@@ -134,43 +177,128 @@ def handle(db, platform, raw):
     except AccessDenied:
         if event.private:
             from ama.prospects import handle as handle_prospect
+
             return handle_prospect(db, event)
-        account = db.scalar(select(Account).where(Account.platform == event.platform, Account.external_id == event.user_id, Account.active.is_(True)))
+        account = db.scalar(
+            select(Account).where(
+                Account.platform == event.platform, Account.external_id == event.user_id, Account.active.is_(True)
+            )
+        )
         if event.private and account and not event.callback:
             return handle_lead_message(db, event, account)
         return public_entry(db, event)
     binding = db.get(Binding, actor.binding_id)
     from ama.ui import engine as ui, access as ui_access
+
     internal = binding.purpose != "client"
     if event.callback and event.callback.startswith("af:ui:"):
         ui.reply(db, actor, event, ui.callback(db, actor, event.callback))
         return
     if event.files:
         from ama.packets import asset_receive
-        if asset_receive(db,actor,event):
-            send(db,event,"Файлы пакета приняты на сохранение. После сохранения откройте предпросмотр; отправка получателям ещё не выполнялась.")
+
+        if asset_receive(db, actor, event):
+            send(
+                db,
+                event,
+                "Файлы пакета приняты на сохранение. После сохранения откройте предпросмотр; отправка получателям ещё не выполнялась.",
+            )
             return
         from ama.models import MediaGroup
+
         parts = event.text.split()
-        work_id = parts[1] if len(parts) > 1 and parts[0] == "/file" else ui.attachment_context(db, actor)
+        from ama.intake import reply_work, capture, chooser
+        from ama.models import Dialog, IntakeFile
+
+        work_id = (
+            parts[1]
+            if len(parts) > 1 and parts[0] == "/file"
+            else ui.attachment_context(db, actor) or reply_work(db, actor, event)
+        )
+        if not work_id and event.files[0].get("album_id"):
+            album_key = hashlib.sha256(
+                f"{event.platform}:{event.chat_id}:{event.topic}:{event.files[0]['album_id']}".encode()
+            ).hexdigest()
+            existing_group = db.get(MediaGroup, album_key)
+            if (
+                existing_group
+                and existing_group.author_id == actor.person_id
+                and existing_group.binding_id == actor.binding_id
+            ):
+                work_id = existing_group.work_id
+        if not work_id:
+            form = db.scalar(
+                select(Dialog)
+                .where(
+                    Dialog.person_id == actor.person_id, Dialog.binding_id == actor.binding_id, Dialog.stage == "upload"
+                )
+                .with_for_update()
+            )
+            pending = capture(db, actor, event, form)
+            if form:
+                buttons = [["Открыть черновик", "af:qd:" + form.id]]
+                key = "draft-files:" + form.id + ":" + (event.files[0].get("album_id") or event.key)
+                queue(
+                    db, binding, key, "Файлы добавлены в черновик. Получателям они ещё не отправлены.", buttons=buttons
+                )
+            elif event.files[0].get("album_id"):
+                groupkey = hashlib.sha256(
+                    (actor.binding_id + actor.person_id + event.files[0]["album_id"]).encode()
+                ).hexdigest()
+                queue(
+                    db,
+                    binding,
+                    "unassigned-album:" + groupkey,
+                    "Альбом сохранён отдельно. Выберите пункт перед передачей.",
+                    buttons=[["Выбрать пункт", "af:uc:" + pending[0].id]],
+                )
+            else:
+                ui.reply(db, actor, event, chooser(db, actor, ui.session(db, actor), pending))
+            return
         for i, f in enumerate(event.files):
             group = None
             group_key = None
             if f.get("album_id"):
-                group_key = hashlib.sha256(f"{event.platform}:{event.chat_id}:{event.topic}:{f['album_id']}".encode()).hexdigest()
+                group_key = hashlib.sha256(
+                    f"{event.platform}:{event.chat_id}:{event.topic}:{f['album_id']}".encode()
+                ).hexdigest()
                 group = db.get(MediaGroup, group_key)
                 if group:
-                    if group.author_id != actor.person_id or group.binding_id != actor.binding_id or (work_id and work_id != group.work_id):
+                    if (
+                        group.author_id != actor.person_id
+                        or group.binding_id != actor.binding_id
+                        or (work_id and work_id != group.work_id)
+                    ):
                         raise AccessDenied("Контекст альбома не совпадает с отправителем или пунктом.")
                     work_id = group.work_id
                 elif not work_id:
                     raise RetryLater("Для альбома не найден пункт. Отправьте его с подписью /file ID_ПУНКТА.")
             if not work_id:
-                send(db, event, "Выберите пункт: отправьте файл с подписью /file ID_ПУНКТА. Без связи файл никуда не передан.")
+                send(
+                    db,
+                    event,
+                    "Выберите пункт: отправьте файл с подписью /file ID_ПУНКТА. Без связи файл никуда не передан.",
+                )
                 return
             attach(db, actor, work_id, event.platform, f["file_id"], f["filename"], f"{event.key}:{i}", f["album_id"])
             if group_key and not group:
-                db.add(MediaGroup(id=group_key, work_id=work_id, author_id=actor.person_id, binding_id=actor.binding_id))
+                db.add(
+                    MediaGroup(id=group_key, work_id=work_id, author_id=actor.person_id, binding_id=actor.binding_id)
+                )
+        if event.files[0].get("album_id"):
+            from ama.intake import link as link_intake
+
+            for waiting_file in db.scalars(
+                select(IntakeFile).where(
+                    IntakeFile.album_id == event.files[0]["album_id"],
+                    IntakeFile.person_id == actor.person_id,
+                    IntakeFile.binding_id == actor.binding_id,
+                    IntakeFile.work_id.is_(None),
+                    IntakeFile.dialog_id.is_(None),
+                    IntakeFile.status != "cancelled",
+                )
+            ):
+                link_intake(db, actor, waiting_file.id, work_id)
         if not event.files[0].get("album_id") or (len(parts) > 1 and parts[0] == "/file"):
             send(db, event, "Вложение принято на сохранение. Статус приёмки пункта не изменён.")
         return
@@ -186,11 +314,47 @@ def handle(db, platform, raw):
             return
     if event.callback:
         p = event.callback.split(":")
+        if p[1] == "tax":
+            from ama.legal_setup import tax_consultation
+
+            tax_consultation(db, actor, p[2])
+            send(db, event, "Запрос консультации передан куратору в исходную карточку.")
+            return
+        if p[1] in {"qd", "uc"}:
+            from ama.models import Dialog, IntakeFile
+
+            if p[1] == "qd":
+                form = db.get(Dialog, p[2])
+                if not form or form.person_id != actor.person_id or form.binding_id != actor.binding_id:
+                    raise AccessDenied("Чужой черновик.")
+                require(db, actor, {"partner"})
+                send(db, event, *wizard.screen(db, actor, form))
+                return
+            from ama.intake import own, chooser
+
+            f = own(db, actor, p[2])
+            files = [f]
+            if f.album_id:
+                files = list(
+                    db.scalars(
+                        select(IntakeFile).where(
+                            IntakeFile.album_id == f.album_id,
+                            IntakeFile.binding_id == actor.binding_id,
+                            IntakeFile.person_id == actor.person_id,
+                            IntakeFile.work_id.is_(None),
+                            IntakeFile.status != "cancelled",
+                        )
+                    )
+                )
+            ui.reply(db, actor, event, chooser(db, actor, ui.session(db, actor), files))
+            return
         if p[1] == "pack":
-            ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_view",{"revision_id":p[2]}))
+            ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "pk_view", {"revision_id": p[2]}))
             return
         if p[1] == "return":
-            ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"sla_client_return",{"work_id":p[2]}))
+            ui.reply(
+                db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "sla_client_return", {"work_id": p[2]})
+            )
             return
         if internal and p[1] in {"w", "a"}:
             ui_access.require_staff(db, actor)
@@ -209,44 +373,91 @@ def handle(db, platform, raw):
         elif p[1] == "a":
             text = "/act " + json.dumps({"id": p[2], "version": int(p[3]), "action": p[4]})
         elif p[1] == "t":
-            text = "/training " + json.dumps({"action": p[2], "version": int(p[3]), "course": "call_center" if len(p) > 4 and p[4] == "c" else "general"})
+            text = "/training " + json.dumps(
+                {
+                    "action": p[2],
+                    "version": int(p[3]),
+                    "course": "call_center" if len(p) > 4 and p[4] == "c" else "general",
+                }
+            )
         else:
             text = "/" + p[1]
     command, _, arg = text.partition(" ")
     command = command.split("@")[0].lower()
     if command == "/finance" and not arg:
-        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"fi_home"))
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "fi_home"))
         return
     if command == "/broadcast" and not arg:
-        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_list"))
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "pk_list"))
         return
     if (command == "/digital" and not arg) or text == "af:digital":
-        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"dg_list"))
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "dg_list"))
         return
     if command == "/packets" and not arg:
-        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_list"))
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "pk_list"))
         return
     if command == "/sla" and not arg:
-        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"sla_list"))
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "sla_list"))
         return
     if command == "/projects" and not arg:
-        ui.reply(db, actor, event, ui.dispatch(db,actor,ui.session(db,actor),"pp_list"))
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "pp_list"))
         return
     if command == "/af_settings" and not arg:
         ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), "settings"))
         return
-    ui_commands = {"/start": "home", "/menu": "home", "/workspace": "workspace", "/help": "staff_help",
-                   "/tasks": "works", "/work": "work", "/enterprises": "enterprises", "/create": "new",
-                   "/project": "new", "/broadcast": "new", "/sales": "leads", "/deal": "deals",
-                   "/contract": "deals", "/op": "works", "/reports": "new", "/drafts": "drafts"}
+    ui_commands = {
+        "/start": "home",
+        "/menu": "home",
+        "/workspace": "workspace",
+        "/help": "staff_help",
+        "/tasks": "works",
+        "/work": "work",
+        "/enterprises": "enterprises",
+        "/create": "new",
+        "/project": "new",
+        "/broadcast": "new",
+        "/sales": "leads",
+        "/deal": "deals",
+        "/contract": "deals",
+        "/op": "works",
+        "/reports": "new",
+        "/drafts": "drafts",
+    }
     if internal and command in ui_commands and (not arg or command == "/work"):
         action = ui_commands[command]
-        params = {"work_id": arg.strip()} if command == "/work" else {"kind": {
-            "/create": "create_work", "/project": "project", "/broadcast": "broadcast", "/reports": "export"}[command]} if action == "new" else {}
+        params = (
+            {"work_id": arg.strip()}
+            if command == "/work"
+            else {
+                "kind": {
+                    "/create": "create_work",
+                    "/project": "project",
+                    "/broadcast": "broadcast",
+                    "/reports": "export",
+                }[command]
+            }
+            if action == "new"
+            else {}
+        )
         ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), action, params))
         return
     if command in {"/start", "/menu"}:
-        require(db, actor, {"partner", "observer", "curator", "support_head", "specialist", "marketing_manager", "admin", "consultant", "contract", "chief_marketer"})
+        require(
+            db,
+            actor,
+            {
+                "partner",
+                "observer",
+                "curator",
+                "support_head",
+                "specialist",
+                "marketing_manager",
+                "admin",
+                "consultant",
+                "contract",
+                "chief_marketer",
+            },
+        )
         send(db, event, "АМА Франчайзинг · Главное меню", MENU)
     elif command == "/help":
         send(db, event, HELP)
@@ -277,13 +488,21 @@ def handle(db, platform, raw):
         if binding.partner_id:
             query = query.where(Entity.partner_id == binding.partner_id)
         if binding.brand_id:
-            query = query.join(EstablishmentBrand, EstablishmentBrand.establishment_id == Entity.id).where(EstablishmentBrand.brand_id == binding.brand_id, EstablishmentBrand.active.is_(True))
+            query = query.join(EstablishmentBrand, EstablishmentBrand.establishment_id == Entity.id).where(
+                EstablishmentBrand.brand_id == binding.brand_id, EstablishmentBrand.active.is_(True)
+            )
         # Для внутреннего списка также фильтруем области действующих назначений.
         from types import SimpleNamespace
+
         rows = []
         for e in db.scalars(query):
-            scope = SimpleNamespace(binding_id=binding.id, client_binding_id=None, partner_id=e.partner_id,
-                                    brand_id=binding.brand_id, establishment_id=e.id)
+            scope = SimpleNamespace(
+                binding_id=binding.id,
+                client_binding_id=None,
+                partner_id=e.partner_id,
+                brand_id=binding.brand_id,
+                establishment_id=e.id,
+            )
             if roles_for(db, actor, scope):
                 rows.append(f"{e.name}: {e.id}")
         send(db, event, "Предприятия:\n" + ("\n".join(rows) or "Пока нет подключённых предприятий."))
@@ -298,16 +517,25 @@ def handle(db, platform, raw):
         w = transition(db, actor, d["id"], d["version"], d["action"], d.get("data", {}), event.key)
         text, buttons = card(db, actor, w)
         send(db, event, text, buttons)
-    elif command in {"/training","/learning","/knowledge"}:
-        d=json_arg(arg) if arg and command=="/training" else {}
-        action="lr_materials" if command=="/knowledge" else "lr_course" if command=="/training" else "lr_home"
-        params={"course":d.get("course","general"),"op":d.get("action","open"),"expected":d.get("version")} if command=="/training" else {}
-        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),action,params))
+    elif command in {"/training", "/learning", "/knowledge"}:
+        d = json_arg(arg) if arg and command == "/training" else {}
+        action = "lr_materials" if command == "/knowledge" else "lr_course" if command == "/training" else "lr_home"
+        params = (
+            {"course": d.get("course", "general"), "op": d.get("action", "open"), "expected": d.get("version")}
+            if command == "/training"
+            else {}
+        )
+        ui.reply(db, actor, event, ui.dispatch(db, actor, ui.session(db, actor), action, params))
     elif command == "/files":
         w = db.get(Work, arg.strip())
         if not w:
             raise BusinessError("Работа не найдена.")
-        require(db, actor, {"curator", "support_head", "marketing_manager", "specialist", "contract", "partner", "observer"}, w)
+        require(
+            db,
+            actor,
+            {"curator", "support_head", "marketing_manager", "specialist", "contract", "partner", "observer"},
+            w,
+        )
         # Наружу допускаются только клиентские материалы. Внутренние файлы — только в рабочем контуре.
         for a in db.scalars(select(Attachment).where(Attachment.work_id == w.id, Attachment.status == "stored")):
             if binding.purpose == "client" and a.visibility != "client":
@@ -345,12 +573,24 @@ def handle(db, platform, raw):
         a = db.scalar(select(Account).where(Account.person_id == lead.person_id, Account.active.is_(True)))
         if not a:
             raise BusinessError("Нет активного аккаунта лида.")
-        contact = lead.data.get("contact") or ({"platform": a.platform, "chat_id": a.external_id} if a.platform == "telegram" else None)
+        contact = lead.data.get("contact") or (
+            {"platform": a.platform, "chat_id": a.external_id} if a.platform == "telegram" else None
+        )
         if not contact:
             raise BusinessError("Нет подтверждённого личного чата лида.")
-        db.add(Outbox(dedupe_key=f"lead-reply:{event.key}", platform=contact["platform"], chat_id=contact["chat_id"],
-                      payload={"text": d["text"], "lead_id": lead.id, "touch_reason": d.get("touch_reason", "consultant_reply"),
-                               "silence_epoch": lead.data.get("silence", {}).get("epoch")}))
+        db.add(
+            Outbox(
+                dedupe_key=f"lead-reply:{event.key}",
+                platform=contact["platform"],
+                chat_id=contact["chat_id"],
+                payload={
+                    "text": d["text"],
+                    "lead_id": lead.id,
+                    "touch_reason": d.get("touch_reason", "consultant_reply"),
+                    "silence_epoch": lead.data.get("silence", {}).get("epoch"),
+                },
+            )
+        )
         send(db, event, "Ответ поставлен в очередь. Автоматически внутренние заметки не отправляются.")
     elif command == "/broadcast":
         d = json_arg(arg)

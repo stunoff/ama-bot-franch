@@ -107,15 +107,9 @@ def work_actions(db, actor, w):
         actions += ["wait_partner", "wait_uk", "wait_external"]
         if not w.pending_owner_id:
             actions.append("handoff")
-    required = (
-        {"marketing_manager"}
-        if w.kind.startswith("marketing")
-        else {"contract"}
-        if w.kind in {"legal", "debt"}
-        else {"curator"}
-        if w.kind in {"internal_opening", "technical_opening", "official_opening"}
-        else access.STAFF
-    )
+    from ama.service import review_roles
+
+    required = review_roles(w)
     if actor.person_id == w.reviewer_id and w.status == "review" and roles & required:
         actions += ["accept", "reject"]
     if actor.person_id == w.pending_owner_id and actor.binding_id == w.pending_binding_id:
@@ -163,7 +157,7 @@ def operations(db, actor, w):
         }:
             result.append("offer")
     if w.kind == "debt" and "contract" in roles:
-        result += ["invoice", "debt_payment", "deferral"]
+        result += ["invoice", "debt_payment"]
     if w.kind == "digital" and not w.data.get("digital_program"):
         if roles & {"curator", "specialist"}:
             result.append("passport")
@@ -323,6 +317,12 @@ def dispatch(db, actor, s, action, p):
         if not p.get("establishment_id"):
             actions += [B(label, "works", filter=k) for k, label in FILTERS.items() if k != mode]
         return show(db, actor, s, text, actions + [B("В меню", "home")], action, **{**params, "page": page})
+    if action == "close_without_confirmation_begin":
+        w = work(db, actor, p["work_id"])
+        d = business.make_draft(db, actor, "closure:without_confirmation", "Закрыть без подтверждения ФП", {}, w)
+        from ama.ui.controller import draft_screen
+
+        return draft_screen(db, actor, s, {"draft_id": d.id})
     if action == "work":
         w = work(db, actor, p["work_id"])
         detail = access.can_work(db, actor, w, detail=True)
@@ -337,10 +337,17 @@ def dispatch(db, actor, s, action, p):
                 f"\nПредложена передача: {repo.name(db, w.pending_owner_id)}. До принятия отвечает текущий владелец."
             )
         actions = []
+        from ama.closures import authorize as can_close
+
+        try:
+            can_close(db, actor, w)
+            actions.append(B("Закрыть без подтверждения ФП…", "close_without_confirmation_begin", work_id=w.id))
+        except BusinessError:
+            pass
         if w.data.get("digital_program"):
             actions.append(B("Цифровой мастер: отдельные результаты", "dg_view", id=w.data["digital_program"]))
         if detail:
-            if db.get(Binding,actor.binding_id).purpose != "client":
+            if db.get(Binding, actor.binding_id).purpose != "client":
                 actions.append(B("Ответить клиенту / запросить данные", "pub_new", work_id=w.id))
                 actions.append(B("История отправки клиенту", "pub_list", work_id=w.id))
             if w.data.get("waiting"):
@@ -410,8 +417,10 @@ def dispatch(db, actor, s, action, p):
             [B("← Карточка", "work", work_id=w.id)],
             prompt=prompt,
         )
-    if action in {"work_files", "work_file"} and db.get(Binding,actor.binding_id).purpose == "client":
-        raise AccessDenied("Внутренний список файлов доступен только сотрудникам; опубликованные материалы приходят отдельным сообщением.")
+    if action in {"work_files", "work_file"} and db.get(Binding, actor.binding_id).purpose == "client":
+        raise AccessDenied(
+            "Внутренний список файлов доступен только сотрудникам; опубликованные материалы приходят отдельным сообщением."
+        )
     if action == "work_files":
         w = work(db, actor, p["work_id"], detail=True)
         rows = list(db.scalars(select(Attachment).where(Attachment.work_id == w.id).order_by(Attachment.created_at)))

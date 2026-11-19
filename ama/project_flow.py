@@ -24,7 +24,8 @@ from ama.models import (
     Timer,
     now,
 )
-from ama.project_catalog import CATALOG, GROUPS, VERSION, default_mode
+from ama.project_catalog import GROUPS, VERSION, default_mode
+from ama.project_templates import compiled, template
 from ama.service import validate_scope, versioned, parse_date, queue, make_timer, stamp, STAFF
 from ama.calendar import Calendar
 from ama.ui import access
@@ -100,6 +101,7 @@ def create(db, actor, data, key):
     if scenario not in SCENARIOS:
         raise BusinessError("Выберите сценарий.")
     validate_scope(db, data["partner_id"], data.get("brand_id"), data["establishment_id"])
+    catalog, template_source = compiled(db, data)
     p = ProjectPlan(
         id=key,
         bot_id=settings().bot_id,
@@ -114,7 +116,12 @@ def create(db, actor, data, key):
         scenario=scenario,
         version=1,
         dates={},
-        profile={"matrix_version": VERSION, "flags": {}, "next_scan": now().isoformat()},
+        profile={
+            "matrix_version": VERSION,
+            "template_source": template_source,
+            "flags": {},
+            "next_scan": now().isoformat(),
+        },
     )
     authorize(db, actor, p, "curator")
     for person, names in [(p.marketing_manager_id, {"marketing_manager"}), (p.partner_person_id, {"partner"})]:
@@ -137,13 +144,13 @@ def create(db, actor, data, key):
     db.flush()
     for name in ("curator", "marketing"):
         db.add(ProjectLane(project_id=p.id, name=name, version=1, data={}))
-    for code, item in CATALOG.items():
+    for code, item in catalog.items():
         db.add(
             ProjectBlock(
                 project_id=p.id,
                 code=code,
                 lane=item["lane"],
-                mode=default_mode(item, scenario),
+                mode=item.get("template_mode", default_mode(item, scenario)),
                 status="waiting",
                 version=1,
                 data={"template": deepcopy(item)},
@@ -219,7 +226,7 @@ def configure(db, actor, project_id, common_version, data):
         b
         for b in blocks(db, p).values()
         if b.lane == lane
-        and CATALOG[b.code]["group"] == group
+        and template(db, b)["group"] == group
         and (not data.get("block_code") or b.code == data["block_code"])
     ]
     if not selected:
@@ -255,6 +262,7 @@ def configure(db, actor, project_id, common_version, data):
             **b.data,
             **{k: data[k] for k in ("route_key", "control_days", "reason") if data.get(k)},
             "inheritance": proof,
+            "manual_start": True,
         }
         b.version += 1
     revision(
@@ -312,7 +320,7 @@ def set_profile(db, actor, project_id, version, data):
             if p.scenario == "existing" and k in {"startup_cycle", "marketing_followup"} and data[k] == "yes":
                 raise BusinessError("Для действующего объекта используйте отдельный маркетинговый план без сброса D0.")
             if flags.get(k) != data[k] and any(
-                b.work_id and CATALOG[b.code].get("flag") == k for b in blocks(db, p).values()
+                b.work_id and template(db, b).get("flag") == k for b in blocks(db, p).values()
             ):
                 raise BusinessError("Условие уже используется работой: сначала согласуйте её изменение.")
             flags[k] = data[k]
@@ -362,7 +370,7 @@ def date_action(db, actor, project_id, version, data):
         affected = [
             b
             for b in blocks(db, p).values()
-            if CATALOG[b.code].get("anchor") == name
+            if template(db, b).get("anchor") == name
             and b.work_id
             and db.get(Work, b.work_id).status != "done"
             and db.get(Work, b.work_id).due_at != value
@@ -392,11 +400,14 @@ def date_action(db, actor, project_id, version, data):
     )
     p.dates = dates
     if name == "planned_technical":
-        from ama.sla import case_for,opening_check
-        for work in db.scalars(select(Work).where(Work.project_id==p.id,Work.kind=="digital",Work.status!="done")):
-            case=case_for(db,work)
+        from ama.sla import case_for, opening_check
+
+        for work in db.scalars(
+            select(Work).where(Work.project_id == p.id, Work.kind == "digital", Work.status != "done")
+        ):
+            case = case_for(db, work)
             if case:
-                opening_check(db,case,work)
+                opening_check(db, case, work)
     p.version += 1
     if name == "actual_internal":
         p.stage = "internal_testing"
@@ -410,7 +421,7 @@ def date_action(db, actor, project_id, version, data):
 
 
 def route_for(db, p, b):
-    item = CATALOG[b.code]
+    item = template(db, b)
     key = b.data.get("route_key") or item["route"]
     r = db.scalar(select(Record).where(Record.kind == "route", Record.key == key, Record.published.is_(True)))
     if not r:
@@ -436,14 +447,16 @@ def route_for(db, p, b):
     days = b.data.get("control_days") or d.get("control_workdays")
     if not cal or not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 365:
         return None, "Нужны опубликованный календарь и контрольный срок 1–365 рабочих дней"
-    owner = d.get("owner_id")
+    owner = p.partner_person_id if item.get("executor_role") == "partner" else d.get("owner_id")
     reviewer = p.marketing_manager_id if b.lane == "marketing" else p.curator_id
+    if item.get("configured") and item.get("independent_review", True) and owner == reviewer:
+        return None, "Нужен независимый принимающий настраиваемого результата"
     scope = SimpleNamespace(
         partner_id=p.partner_id, establishment_id=p.establishment_id, brand_id=None if item["shared"] else p.brand_id
     )
     if (
         not owner
-        or not active_person_role(db, owner, STAFF, scope)
+        or not active_person_role(db, owner, {item["executor_role"]} if item.get("configured") else STAFF, scope)
         or not reviewer
         or not active_person_role(
             db, reviewer, {"marketing_manager"} if b.lane == "marketing" else {"curator", "support_head"}, scope
@@ -460,17 +473,23 @@ def route_for(db, p, b):
             )
         )
     )
-    review = next(
-        (
-            x
-            for x in review_bindings
-            if all(
-                not getattr(x, k) or getattr(x, k) == getattr(scope, k)
-                for k in ("partner_id", "brand_id", "establishment_id")
-            )
-        ),
-        None,
+    eligible = [
+        x
+        for x in review_bindings
+        if all(
+            not getattr(x, k) or getattr(x, k) == getattr(scope, k)
+            for k in ("partner_id", "brand_id", "establishment_id")
+        )
+    ]
+    review_route = db.scalar(
+        select(Record).where(
+            Record.kind == "route",
+            Record.key == ("marketing" if b.lane == "marketing" else "support"),
+            Record.published.is_(True),
+        )
     )
+    preferred = review_route.data.get("binding_id") if review_route else None
+    review = next((x for x in eligible if x.id == preferred), None) or (eligible[0] if len(eligible) == 1 else None)
     if not review:
         return None, "Нет проверенного маршрута принимающего"
     return (binding, owner, reviewer, review, Calendar(cal.data), days, d["calendar"]), None
@@ -478,7 +497,7 @@ def route_for(db, p, b):
 
 def launch(db, p, b, route, origin=None, title=None):
     binding, owner, reviewer, review, cal, days, calendar = route
-    item = CATALOG[b.code]
+    item = template(db, b)
     due = cal.end_of_workday(now(), days)
     anchor = item.get("anchor")
     if anchor and anchor.startswith("planned_") and p.dates.get(anchor):
@@ -506,12 +525,26 @@ def launch(db, p, b, route, origin=None, title=None):
         origin_key=origin or f"plan:{b.id}",
         due_at=due,
         original_due_at=due,
-        data={"calendar": calendar, "project_block_id": b.id, "mode": b.mode, "section": item["section"]},
+        data={
+            "calendar": calendar,
+            "project_block_id": b.id,
+            "mode": b.mode,
+            "section": item["section"],
+            "expected_result": item.get("expected_result"),
+            "completion_rule": item.get("completion_rule"),
+            "result_type": item.get("result_type", "manual"),
+            "template_source": p.profile.get("template_source"),
+        },
     )
     db.add(w)
     db.flush()
     from ama.sla import initialize
-    fixed_date=bool((item.get("anchor", "").startswith("planned_") and p.dates.get(item["anchor"])) or (b.code=="readiness" and p.dates.get("planned_technical")) or (origin and origin.startswith("campaign:")))
+
+    fixed_date = bool(
+        (item.get("anchor", "").startswith("planned_") and p.dates.get(item["anchor"]))
+        or (b.code == "readiness" and p.dates.get("planned_technical"))
+        or (origin and origin.startswith("campaign:"))
+    )
     initialize(db, w, explicit_due=fixed_date)
     make_timer(db, w, "deadline", w.due_at)
     stamp(db, None, w, "PROJECT_WORK_CREATED", data={"project_id": p.id, "block_id": b.id})
@@ -523,6 +556,9 @@ def launch(db, p, b, route, origin=None, title=None):
         work=w,
         buttons=[["Открыть", "af:w:" + w.id]],
     )
+    from ama.legal_setup import on_launch
+
+    on_launch(db, p, b, w)
     return w
 
 
@@ -532,7 +568,7 @@ def advance(db, p):
     changed = False
     for b in bs.values():
         old = (b.status, deepcopy(b.data))
-        item = CATALOG[b.code]
+        item = template(db, b)
         reason = None
         if b.work_id:
             w = db.get(Work, b.work_id)
@@ -543,6 +579,12 @@ def advance(db, p):
             b.status = "inherited" if ready(db, b) else "waiting"
             reason = None if ready(db, b) else "Нужен проверенный источник наследования"
         else:
+            if (
+                item.get("configured")
+                and item.get("start_event", "").lower() == "manual"
+                and not b.data.get("manual_start")
+            ):
+                reason = "Нужно явное применение короткого фильтра куратора"
             flag = item.get("flag")
             if flag and p.profile.get("flags", {}).get(flag, "unknown") != "yes":
                 reason = "Условие " + flag + ": " + p.profile.get("flags", {}).get(flag, "unknown")
@@ -647,9 +689,25 @@ def before_transition(db, actor, w, action, data):
     for b in linked:
         if b.mode == "not_applicable":
             continue
+        from ama.legal_setup import before_transition as legal_before
+
+        legal_before(w, b.code)
+        configured = template(db, b)
+        if configured.get("configured") and configured.get("result_type") in {"photo", "document"}:
+            from ama.models import Attachment
+
+            files = list(
+                db.scalars(select(Attachment).where(Attachment.work_id == w.id, Attachment.status == "stored"))
+            )
+            if configured["result_type"] == "photo":
+                from pathlib import Path
+
+                files = [f for f in files if Path(f.filename).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}]
+            if not files:
+                raise BusinessError("Нет обязательного сохранённого материала по шаблону результата.")
         p = get(db, b.project_id)
         bs = blocks(db, p)
-        if any(not prerequisite_ready(db, bs[k], b.code) for k in CATALOG[b.code]["depends_on"]):
+        if any(not prerequisite_ready(db, bs[k], b.code) for k in template(db, b)["depends_on"]):
             raise BusinessError("Изменились зависимости проекта; результат пока нельзя принять.")
         if b.code == "readiness":
             for required in ("fp_training", "guest_care", "franchise"):
@@ -664,7 +722,8 @@ def before_transition(db, actor, w, action, data):
                 raise BusinessError("Есть открытые блокирующие замечания.")
         if b.code == "fp_training":
             from ama.learning import completed
-            if not completed(db,p.partner_person_id):
+
+            if not completed(db, p.partner_person_id):
                 raise BusinessError("Назначенный ФП не завершил обязательное ознакомление и обновления лично.")
         if b.code == "start_smm":
             end = w.data.get("smm_until")
@@ -1009,7 +1068,11 @@ def work_details(db, actor, work_id, version, data):
         raise BusinessError("Нет открытой проектной работы.")
     action = data["step"]
     before = deepcopy(w.data)
-    if linked.code in {"kitchen_equipment", "systems_equipment"}:
+    from ama.legal_setup import details as legal_details
+
+    if legal_details(db, actor, w, linked, data):
+        pass
+    elif linked.code in {"kitchen_equipment", "systems_equipment"}:
         state = deepcopy(w.data.get("procurement", {}))
         if state.get("received"):
             raise BusinessError(
@@ -1162,5 +1225,6 @@ def work_details(db, actor, work_id, version, data):
         data={"step": action, "before": before, "after": w.data},
     )
     from ama.sla import refresh_deadline
-    refresh_deadline(db,w,"project_evidence")
+
+    refresh_deadline(db, w, "project_evidence")
     return {"id": w.id, "version": w.version}

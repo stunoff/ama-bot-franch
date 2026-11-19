@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from sqlalchemy import select
-from ama.auth import require, roles_for, active_person_role
+from ama.auth import require_business, business_roles, require, roles_for, active_person_role
 from ama.calendar import Calendar
 from ama.errors import BusinessError, Conflict, AccessDenied
 from ama.models import (
@@ -137,7 +137,10 @@ def create_work(db, actor, data, key):
             raise AccessDenied("Нет доступа к исходной работе.")
         return existing
     binding = db.get(Binding, actor.binding_id)
-    role = require(db, actor, {"partner", "curator", "support_head", "marketing_manager"})
+    creator_roles = {"partner", "curator", "support_head", "marketing_manager"}
+    if db.info.get("finance_create") and data.get("kind") == "finance_contract":
+        creator_roles.add("consultant")
+    role = require_business(db, actor, creator_roles)
     if role == "partner":
         data = {**data, "partner_id": binding.partner_id, "brand_id": binding.brand_id}
         route = record(db, "route", data.get("kind", "support")).data
@@ -152,6 +155,11 @@ def create_work(db, actor, data, key):
             "calendar": route["calendar"],
         }
     reserved = {
+        "offer",
+        "recipient",
+        "paid_result_delivered_at",
+        "paid_original_deadline",
+        "paid_pauses",
         "sla",
         "sla_case",
         "partner_request",
@@ -216,7 +224,7 @@ def create_work(db, actor, data, key):
         work.data = {**work.data, "financial_protocol": True}
     if not active_person_role(db, work.owner_id, STAFF | {"partner"}, work):
         raise BusinessError("Исполнитель не имеет действующей роли в области работы.")
-    if not active_person_role(db, work.reviewer_id, STAFF | {"partner"}, work):
+    if not active_person_role(db, work.reviewer_id, review_roles(work), work):
         raise BusinessError("Принимающий не назначен в области работы.")
     if role == "partner" and actor.person_id != work.partner_person_id:
         raise AccessDenied("Подтвердить запрос может назначенный ФП.")
@@ -231,7 +239,7 @@ def create_work(db, actor, data, key):
             brand_id=work.brand_id,
             establishment_id=work.establishment_id,
         )
-        require(db, actor, {"curator", "support_head", "marketing_manager"}, scope)
+        require_business(db, actor, creator_roles - {"partner"}, scope)
     db.add(work)
     db.flush()
     from ama.sla import initialize
@@ -263,11 +271,44 @@ def parse_date(value):
         raise BusinessError("Дата нужна в ISO 8601 с часовым поясом, например 2026-12-01T15:00:00+03:00.") from e
 
 
+MARKETING_RESULTS = {
+    "design",
+    "smm",
+    "advertising",
+    "printing",
+    "marketing_plan",
+    "analytics",
+    "community",
+    "community_design",
+    "start_smm",
+    "promotion",
+    "campaign",
+    "event",
+    "city_analytics",
+}
+
+
+def review_roles(w):
+    if w.data.get("partner_request") and w.reviewer_id == w.partner_person_id:
+        return {"partner"}
+    if w.kind.startswith("marketing") or w.kind in MARKETING_RESULTS:
+        return {"marketing_manager"}
+    if w.kind in {"legal", "debt"}:
+        return {"contract"}
+    if w.kind in {"internal_opening", "technical_opening", "official_opening"}:
+        return {"curator"}
+    if w.kind.startswith("project."):
+        return {"curator", "support_head"}
+    return STAFF | {"partner"}
+
+
 def transition(db, actor, work_id, version, action, data, key):
     w = db.scalar(select(Work).where(Work.id == work_id).with_for_update())
     if not w:
         raise BusinessError("Работа не найдена.")
-    roles = roles_for(db, actor, w)  # Даже повторная команда проходит актуальную проверку доступа.
+    roles = business_roles(db, actor, w)  # Даже повторная команда проходит актуальную проверку доступа.
+    if not roles & (STAFF | {"partner"}):
+        raise AccessDenied("Нет бизнес-права в текущем контуре.")
     from ama.digital import before_transition as digital_before
 
     digital_before(db, actor, w, action, data)
@@ -292,12 +333,12 @@ def transition(db, actor, work_id, version, action, data, key):
     old = w.version
     role = None
     if action == "take":
-        role = require(db, actor, STAFF | {"partner"}, w)
+        role = require_business(db, actor, STAFF | {"partner"}, w)
         if actor.person_id != w.owner_id or w.status not in {"new", "waiting_uk", "rework"}:
             raise AccessDenied("Взять работу может её текущий исполнитель.")
         w.status = "in_progress"
     elif action == "submit":
-        role = require(db, actor, STAFF | {"partner"}, w)
+        role = require_business(db, actor, STAFF | {"partner"}, w)
         if actor.person_id != w.owner_id or w.status not in {"in_progress", "materials", "rework"}:
             raise AccessDenied("Результат передаёт назначенный исполнитель.")
         if "partner" in roles and not (roles & STAFF) and actor.person_id != w.partner_person_id:
@@ -328,16 +369,8 @@ def transition(db, actor, work_id, version, action, data, key):
         cal = Calendar(record(db, "calendar", w.data.get("calendar", "support")).data)
         w.due_at = cal.end_of_workday(now())
     elif action in {"accept", "reject"}:
-        required = (
-            {"marketing_manager"}
-            if w.kind.startswith("marketing")
-            else {"contract"}
-            if w.kind in {"legal", "debt"}
-            else {"curator"}
-            if w.kind in {"internal_opening", "technical_opening", "official_opening"}
-            else STAFF | {"partner"}
-        )
-        role = require(db, actor, required, w)
+        required = review_roles(w)
+        role = require_business(db, actor, required, w)
         if actor.person_id != w.reviewer_id or w.status != "review":
             raise AccessDenied("Принять или вернуть может только назначенный принимающий.")
         if "partner" in roles and not (roles & STAFF) and actor.person_id != w.partner_person_id:
@@ -349,12 +382,7 @@ def transition(db, actor, work_id, version, action, data, key):
                 child = db.get(Work, dep)
                 if not child or child.outcome != "accepted":
                     raise BusinessError("Зависимый результат не принят.")
-            if (
-                w.kind == "support"
-                and w.data.get("partner_request")
-                and w.partner_person_id
-                and actor.person_id != w.partner_person_id
-            ):
+            if w.data.get("partner_request") and w.partner_person_id and actor.person_id != w.partner_person_id:
                 w.data = {**w.data, "technical_reviewer_id": w.reviewer_id, "technical_result_accepted": True}
                 w.status, w.owner_id, w.reviewer_id = "review", w.partner_person_id, w.partner_person_id
             else:
@@ -378,7 +406,7 @@ def transition(db, actor, work_id, version, action, data, key):
             w.returns += 1
             w.data = {**w.data, "rejection": data["reason"]}
     elif action in {"wait_partner", "wait_external", "wait_uk"}:
-        role = require(db, actor, STAFF, w)
+        role = require_business(db, actor, STAFF, w)
         if actor.person_id != w.owner_id:
             raise AccessDenied("Ожидание устанавливает текущий ответственный.")
         if not all(data.get(k) for k in ("party", "required", "next_check")):
@@ -402,7 +430,7 @@ def transition(db, actor, work_id, version, action, data, key):
             },
         }
     elif action == "resume":
-        role = require(db, actor, STAFF, w)
+        role = require_business(db, actor, STAFF, w)
         if actor.person_id != w.owner_id or not w.status.startswith("waiting_"):
             raise AccessDenied("Возобновление доступно ответственному ожидающей работы.")
         if not data.get("due_at"):
@@ -412,7 +440,7 @@ def transition(db, actor, work_id, version, action, data, key):
             raise BusinessError("Срок должен быть в будущем.")
         w.status = "in_progress"
     elif action == "handoff":
-        role = require(db, actor, STAFF, w)
+        role = require_business(db, actor, STAFF, w)
         if actor.person_id != w.owner_id or w.pending_owner_id:
             raise AccessDenied("Передачу инициирует текущий владелец без другой активной передачи.")
         target = db.get(Binding, data.get("binding_id"))
@@ -435,7 +463,7 @@ def transition(db, actor, work_id, version, action, data, key):
             buttons=[["Открыть", f"af:w:{w.id}"]],
         )
     elif action == "handoff_accept":
-        role = require(db, actor, STAFF, w)
+        role = require_business(db, actor, STAFF, w)
         if actor.person_id != w.pending_owner_id or actor.binding_id != w.pending_binding_id:
             raise AccessDenied("Передачу принимает назначенный получатель в новом рабочем чате.")
         w.owner_id = w.pending_owner_id
@@ -443,7 +471,7 @@ def transition(db, actor, work_id, version, action, data, key):
         w.binding_id = w.pending_binding_id
         w.pending_owner_id = w.pending_binding_id = None
     elif action == "reschedule":
-        role = require(db, actor, STAFF, w)
+        role = require_business(db, actor, STAFF, w)
         if actor.person_id not in {w.owner_id, w.reviewer_id} or not data.get("reason"):
             raise AccessDenied("Переносит срок текущий ответственный или принимающий с указанием причины.")
         changed = parse_date(data.get("due_at", ""))
@@ -456,7 +484,7 @@ def transition(db, actor, work_id, version, action, data, key):
 
         role = sla_action(db, actor, w, action, data)
     elif action == "cancel":
-        role = require(db, actor, {"curator", "support_head"}, w)
+        role = require_business(db, actor, {"curator", "support_head"}, w)
         if not data.get("reason"):
             raise BusinessError("Нужна причина отмены.")
         w.status, w.outcome = "done", "cancelled"

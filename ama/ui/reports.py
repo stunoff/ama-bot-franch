@@ -11,11 +11,12 @@ from ama.errors import BusinessError, AccessDenied
 from ama.models import UIExport, Binding, Entity, Role, Training, Deal, Audit, now
 from ama.service import queue
 from ama.ui import access, repository
+from ama.test_data import is_test
 
 
 def period(data):
     try:
-        tz = ZoneInfo("Europe/Moscow")
+        tz = ZoneInfo(data.get("timezone") or "Europe/Moscow")
         start = datetime.strptime(data["start"], "%Y-%m-%d").replace(tzinfo=tz)
         end = (datetime.strptime(data["end"], "%Y-%m-%d") + timedelta(days=1)).replace(tzinfo=tz)
     except (ValueError, KeyError) as error:
@@ -48,7 +49,7 @@ def rows(db, actor, data):
             from ama.packets import report as packet_report
             columns,items=packet_report(db,actor,data["packet_id"])
         elif report in {"works", "summary"}:
-            work = [w for w in access.works(db, actor) if in_scope(data, w) and start <= w.created_at < end]
+            work = [w for w in access.works(db, actor) if not is_test(db,w) and in_scope(data, w) and start <= w.created_at < end]
             if report == "works":
                 from ama.service import STATUSES
                 columns = ["ID работы", "ФП", "Предприятие", "Бренд", "Название", "Состояние", "Ответственный", "Принимающий", "Срок UTC", "Просрочена", "Исход"]
@@ -63,7 +64,7 @@ def rows(db, actor, data):
                 items = [["Работ в когорте", len(work)], ["Открытых", sum(w.status != "done" for w in work)],
                          ["Просрочено", sum(w.status != "done" and w.due_at < now() for w in work)]] + [[STATUSES[k], counts[k]] for k in STATUSES]
         elif report == "training":
-            partners = [e for e in db.scalars(select(Entity).where(Entity.kind == "partner")) if access.can_entity(db, actor, e)
+            partners = [e for e in db.scalars(select(Entity).where(Entity.kind == "partner")) if not is_test(db,e) and access.can_entity(db, actor, e)
                         and (not data.get("partner_id") or e.id == data["partner_id"])]
             if data.get("establishment_id"):
                 est = db.get(Entity, data["establishment_id"])
@@ -85,7 +86,7 @@ def rows(db, actor, data):
                      and (not t.completed_at or start <= t.completed_at < end)]
         elif report == "sales":
             # Exactly the visible consultant cohort; an old success never inflates it.
-            visible = access.leads(db, actor)
+            visible = [lead for lead in access.leads(db,actor) if not is_test(db,lead)]
             cohort = [lead for lead in visible if start <= lead.created_at < end and (not data.get("brand_id") or lead.data.get("brand_id") == data["brand_id"])]
             deals = list(db.scalars(select(Deal)))
             visible_ids = {lead.id for lead in visible if not data.get("brand_id") or lead.data.get("brand_id") == data["brand_id"]}

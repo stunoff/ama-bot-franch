@@ -199,7 +199,7 @@ def validate_record(db, kind, value, *, published=False):
     if kind == "policy" and published and value.get("policy_type") == "sla":
         from ama.sla import validate_profile
         validate_profile(value)
-    if kind == "policy" and published and value.get("policy_type") in {"scenario", "sla", "payment", "schedule", "faq","broadcast_permission"}:
+    if kind == "policy" and published and value.get("policy_type") in {"scenario", "sla", "payment", "finance_recipient", "schedule", "faq","broadcast_permission"}:
         if not value.get("approval"):
             raise BusinessError("Укажите основание уполномоченного владельца процесса.")
 
@@ -278,8 +278,14 @@ def extra(db, actor, kind, d):
             delivered(db, obj)
             from ama.packets import delivered as packet_delivered
             packet_delivered(db,obj)
+            from ama.learning import delivered as learning_delivered
+            learning_delivered(db,obj)
+            from ama.finance import delivered as finance_delivered
+            finance_delivered(db,obj)
             if obj.payload.get("op") == "create_topic":
-                if obj.payload.get("digital_group"):
+                if obj.payload.get("finance_topic") or obj.payload.get("finance_batch_topic"):
+                    from ama.finance import on_topic
+                elif obj.payload.get("digital_group"):
                     from ama.digital import on_topic
                 elif obj.payload.get("packet_target"):
                     from ama.packets import on_topic

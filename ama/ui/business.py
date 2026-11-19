@@ -39,6 +39,14 @@ def authorize(db, actor, draft):
         raise AccessDenied("Черновик принадлежит другому пользователю, боту или чату.")
     if draft.status not in {"draft", "checked", "saved"}:
         raise BusinessError("Черновик уже применён или отменён. Откройте актуальную запись.")
+    if draft.kind.startswith('finance:'):
+        from ama.finance import authorize_draft
+        authorize_draft(db,actor,draft)
+        return
+    if draft.kind.startswith('learning:'):
+        from ama.learning import authorize_draft
+        authorize_draft(db,actor,draft)
+        return
     if draft.kind.startswith("digital:"):
         from ama import digital
 
@@ -323,6 +331,13 @@ def from_object(db, actor, obj):
 def execute(db, actor, draft, *, publish=False):
     authorize(db, actor, draft)
     kind, d = draft.kind, deepcopy(draft.data)
+    if kind.startswith("finance:"):
+        from ama.finance import execute_draft
+        return execute_draft(db,actor,draft,d)
+    if kind.startswith('learning:'):
+        from ama.learning import execute_draft
+        return execute_draft(db,actor,draft,d)
+
     if kind.startswith("digital:"):
         from ama import digital
 

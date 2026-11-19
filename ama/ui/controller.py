@@ -20,7 +20,7 @@ SECTIONS = {
     "materials": ("Материалы и сообщения", ["record:material", "record:template"]),
     "calendars": ("Календари и сроки", ["record:calendar", "policy:sla"]),
     "payments": ("Платные работы", ["policy:payment"]),
-    "schedules": ("Расписания и отчёты", ["policy:schedule","policy:broadcast_permission"]),
+    "schedules": ("Расписания и отчёты", ["policy:schedule","policy:broadcast_permission","policy:finance_recipient"]),
 }
 MODEL_CATALOG = {"binding": "bindings", "person": "people", "account": "accounts", "role": "roles", "link": "links"}
 
@@ -224,6 +224,12 @@ def config_command(db, actor, obj, command, data=None, kind=None):
 
 
 def dispatch(db, actor, s, action, p):
+    if action.startswith("fi_"):
+        from ama.ui.finance import dispatch as finance_ui
+        return finance_ui(db,actor,s,action,p)
+    if action.startswith("lr_"):
+        from ama.ui.learning import dispatch as learning_ui
+        return learning_ui(db,actor,s,action,p)
     if action.startswith("dg_"):
         from ama.ui.digital import dispatch as digital_ui
         return digital_ui(db,actor,s,action,p)
@@ -292,6 +298,8 @@ def dispatch(db, actor, s, action, p):
         if isinstance(obj, Binding):
             text += f"\nТест доставки: {'пройден' if obj.verified else 'не пройден'}\nТема: {obj.topic_key or 'без темы'}"
         actions = [B("Редактировать…", "edit", **p), B("История изменений", "history", object_id=obj.id)]
+        if isinstance(obj, Record) and obj.kind=='material' and obj.published:
+            actions.append(B('Замена / техническое ожидание…','lr_begin',op='archive',key=obj.key))
         if isinstance(obj, Record) and obj.published:
             from ama.ui.configuration import dependencies
             deps = dependencies(db, obj)

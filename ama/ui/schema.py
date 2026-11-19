@@ -2,7 +2,7 @@
 from copy import deepcopy
 from ama.sla_rules import CATEGORIES
 
-ROLES = {"admin": "Системный администратор", "partner": "Франчайзи-партнёр", "observer": "Наблюдатель",
+ROLES = {"lawyer":"Юрист", "leadership":"Руководство АМА УК", "admin": "Системный администратор", "partner": "Франчайзи-партнёр", "observer": "Наблюдатель",
          "curator": "Куратор", "support_head": "Руководитель сопровождения", "marketing_manager": "Менеджер маркетинга",
          "specialist": "Специалист", "contract": "Договорный ответственный", "consultant": "Консультант продаж",
          "chief_marketer": "Главный маркетолог"}
@@ -73,9 +73,9 @@ RECORD_VALUES = {
     "calendar": CALENDAR,
     "material": [f("title", "Пользовательское название", required=True), choice("type", "Тип", {"link": "Ссылка", "video": "Видео", "document": "Документ", "image": "Изображение"}),
                  f("url", "HTTPS-ссылка", "url", True), f("audience", "Кому доступен", "multi", True, choices=ROLES),
-                 *SCOPE, f("purpose", "Назначение"), f("module", "Раздел ознакомления", "int", minimum=0, maximum=11), f("verified_on", "Дата проверки ссылки", "date")],
+                 *SCOPE, f("purpose", "Назначение"), f("module", "Раздел ознакомления", "int", minimum=0, maximum=11), f("verified_on", "Дата проверки ссылки", "date"), f("content_approval","Подтверждение владельца содержания"),f("link_checks","Проверки ссылки","multi",choices={"opens":"Открывается","audience":"Права нужной аудитории","exists":"Файл существует","title":"Название совпадает"}),choice("access_stage","Доступ",{"current":"Текущие материалы","general_completed":"После общего ознакомления"}),f("call_center_only","Только по выбранному КЦ","bool"),choice("availability","Доступность",{"active":"Активен","updating":"На обновлении","blocked":"Техническое ожидание"}),f("review_days","Период проверки ссылки, дни","int",minimum=1),f("substantial_update","Существенное обновление","bool"),f("required_update_reason","Причина обязательного обновления"),f("update_cards","Карточки изменений","list",fields=CARD),f("update_brand_ids","Только затронутые бренды (пусто — все)","multiref",source="brand")],
     "course": [f("title", "Название курса"), f("cards", "Карточки ознакомления", "list", True, fields=CARD),
-               f("substantial_update", "Существенное обновление", "bool"), f("required_update_reason", "Причина обязательного обновления")],
+               f("substantial_update", "Существенное обновление", "bool"), f("required_update_reason", "Причина обязательного обновления"),f("content_approval","Подтверждение владельца содержания"),f("update_cards","Только карточки изменений","list",fields=CARD),f("update_brand_ids","Только затронутые бренды (пусто — все)","multiref",source="brand")],
     "route": [ref("binding_id", "Рабочий чат", "binding", True), ref("owner_id", "Следующий ответственный", "person", True),
               ref("reviewer_id", "Принимающий", "person", True), ref("calendar", "Календарь", "record:calendar", True), ref("queue_manager_id", "Ответственный за очередь", "person"), *SCOPE],
     "commercial": [ref("brand_id", "Бренд", "brand", True), f("required_minor", "Условие расчёта, ₽", "money", True, minimum=0),
@@ -87,6 +87,7 @@ RECORD_VALUES = {
     "policy": [],
 }
 POLICIES = {
+    "finance_recipient": [f("title","Получатель",required=True),f("recipient_key","Устойчивый идентификатор банковского получателя", "key",True),f("reference","Утверждённые реквизиты","url",True),f("approval","Основание финансового утверждения",required=True),*deepcopy(SCOPE)],
     "broadcast_permission": [ref("person_id","Автор с правом рассылки","person",True),f("brand_ids","Разрешённые бренды (пусто — все в области роли)","multiref",source="brand"),f("allow_general","Разрешена общая информация УК","bool"),*deepcopy(SCOPE),f("approval","Основание назначения права",required=True)],
     "scenario": [f("title", "Название сценария", required=True), choice("scenario", "Тип проекта", SCENARIOS, True),
                  f("blocks", "Пункты и зависимости", "list", True, fields=POLICY_BLOCK), f("approval", "Подтверждение владельца процесса", required=True)],
@@ -100,8 +101,8 @@ POLICIES = {
                ref("brand_id", "Бренд", "brand"), f("telegram_bot_username", "Публичное имя Telegram-бота"), f("max_bot_username", "Публичное имя MAX-бота"), f("tags", "Разрешённые метки", "lines"), f("welcome", "Приветствие")],
     "faq": [f("title", "Тема", required=True), f("question", "Вопрос", required=True), f("answer", "Утверждённый ответ", required=True),
             ref("brand_id", "Бренд", "brand"), f("approved_on", "Дата утверждения", "date", True), f("approval", "Подтверждение владельца", required=True)],
-    "payment": [f("title", "Утверждённый получатель", required=True), f("reference", "Ссылка на защищённые реквизиты", "url", True),
-                f("services", "Применимость к услугам", "multi", True, choices={k: PURPOSES[k] for k in ["projecting", "software", "personnel", "menu", "design", "advertising", "printing", "systems_training", "smm"]}),
+    "payment": [f("recipient_key","Устойчивый идентификатор получателя","key"),f("title", "Утверждённый получатель", required=True), f("reference", "Ссылка на защищённые реквизиты", "url", True),
+                f("services", "Применимость к услугам", "multi", True, choices={k: PURPOSES[k] for k in ["projecting", "software", "personnel", "menu", "design", "advertising", "printing", "systems_training", "smm", "reviews", "support"]}),
                 f("approval", "Основание финансового владельца", required=True), f("valid_until", "Действует до", "date")],
     "schedule": [f("title", "Название расписания", required=True), f("event", "Существующее событие", "key", True),
                  ref("calendar", "Календарь", "record:calendar", True), ref("binding_id", "Получатель", "binding", True),
@@ -119,6 +120,12 @@ POLICIES = {
 
 
 def fields_for(kind):
+    if kind.startswith("finance:"):
+        from ama.ui.finance import fields
+        return fields(kind)
+    if kind.startswith("learning:"):
+        from ama.ui.learning import fields
+        return fields(kind)
     if kind.startswith("digital:"):
         from ama.ui.digital import fields
         return fields(kind)
@@ -270,7 +277,7 @@ def fields_for(kind):
                 "reply": [f("text", "Текст ответа клиенту", required=True, maximum=3500)]}.get(action, [])
     if kind.startswith("deal:"):
         action = kind.split(":")[1]
-        return {"sent": [f("evidence", "Подтверждение отправки текущего обязательного комплекта", required=True)],
+        return {"signed_uk":[f("package","Версия комплекта","int",True,minimum=1),f("evidence","Подтверждение подписи УК",required=True)],"signed_partner":[f("package","Версия комплекта","int",True,minimum=1),f("evidence","Подтверждение подписи клиента",required=True)],"invitation_sent":[f("evidence","Подтверждение отправки приглашения",required=True)],"invitation_accepted":[f("evidence","Подтверждение принятия приглашения",required=True)],"sent": [f("evidence", "Подтверждение отправки текущего обязательного комплекта", required=True)],
                 "curator_clarify": [f("question", "Что нужно уточнить консультанту", required=True)],
                 "package": [f("document_reference", "Ссылка на редакцию комплекта", required=True)],
                 "signed": [f("evidence", "Подтверждение подписей текущей редакции", required=True)],
@@ -279,8 +286,8 @@ def fields_for(kind):
     if kind.startswith("operation:"):
         action = kind.split(":")[1]
         return {
-            "offer": [f("scope", "Объём услуги", required=True), f("amount_minor", "Стоимость, ₽", "money", True, minimum=1), f("valid_until", "Предложение действует до", "datetime", True),
-                      choice("start_rule", "Согласованное правило старта", {"partner_confirmation": "Подтверждение ФП", "partner_payment_evidence": "Подтверждение оплаты ФП"}, True), f("deadline", "Срок результата", "datetime", True)],
+            "offer": [ref("payment_policy","Утверждённые реквизиты услуги","record:policy",True),choice("deadline_mode","Срок",{"fixed":"Фиксированная дата","duration":"Длительность от допустимого старта"}),f("duration_minutes","Длительность, минуты","int",minimum=1),choice("duration_counter","Счёт длительности",{"calendar":"Календарное время","working":"Рабочее время"}),f("scope", "Объём услуги", required=True), f("amount_minor", "Стоимость, ₽", "money", True, minimum=1), f("valid_until", "Предложение действует до", "datetime", True),
+                      choice("start_rule", "Согласованное правило старта", {"partner_confirmation": "Подтверждение ФП", "partner_payment_evidence": "Подтверждение оплаты ФП"}, True), f("deadline", "Срок результата для фиксированной даты", "datetime")],
             "invoice": [f("amount_minor", "Сумма счёта, ₽", "money", True, minimum=1), f("document", "Документ / ссылка", required=True)],
             "debt_payment": [f("amount_minor", "Подтверждённая сумма, ₽", "money", True, minimum=1), f("bank_reference", "Банковская операция", required=True)],
             "deferral": [f("due_at", "Согласованный срок", "datetime", True), f("approval", "Основание отсрочки", required=True)],

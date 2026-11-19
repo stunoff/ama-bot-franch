@@ -2,7 +2,7 @@
 from sqlalchemy import select
 from ama.auth import require, roles_for
 from ama.errors import BusinessError, AccessDenied
-from ama.models import Work, Training, now, Binding
+from ama.models import Work, now, Binding
 from ama.service import versioned, stamp, parse_date, queue, make_timer
 
 
@@ -12,6 +12,9 @@ def operation(db, actor, work_id, expected, action, data):
         raise BusinessError("Карточка не найдена.")
     roles_for(db, actor, w)
     versioned(w, expected)
+    if action in {'offer','offer_accept'} and (w.data.get('financial_protocol') or data.get('payment_policy')):
+        from ama.finance import extra_operation
+        return extra_operation(db,actor,w,expected,action,data)
     old, role = w.version, None
     if w.data.get("digital_program") and action in {"passport","tech_confirm"}:
         raise BusinessError("Используйте цифровой мастер: поля и результаты принимаются раздельно.")
@@ -110,9 +113,8 @@ def operation(db, actor, work_id, expected, action, data):
         role = require(db, actor, {"curator"}, w)
         if w.kind not in {"internal_opening", "technical_opening", "official_opening"} or actor.person_id != w.reviewer_id:
             raise AccessDenied("Допуск к открытию подтверждает назначенный куратор.")
-        training = db.scalar(select(Training).where(Training.person_id == w.partner_person_id, Training.course_key == "general",
-                                                   Training.completed_at.is_not(None)))
-        if not training or w.data.get("blockers"):
+        from ama.learning import completed
+        if not completed(db,w.partner_person_id) or w.data.get("blockers"):
             raise BusinessError("Нет завершённого персонального ознакомления или есть красный блокер.")
         for dep in w.data.get("depends_on", []):
             item = db.get(Work, dep)

@@ -30,6 +30,7 @@ ADMIN_CATALOGS = {
     },
 }
 POLICY_LABELS = {
+    "finance_recipient": "Договорные банковские получатели",
     "broadcast_permission": "Права рассылки ФП",
     "sales_content": "Карточки и материалы продаж",
     "scenario": "Сценарии и чек-листы",
@@ -159,7 +160,30 @@ def refs(db, actor, source, draft=None, search=""):
         scope_for_draft(db, draft) if draft else SimpleNamespace(partner_id=None, brand_id=None, establishment_id=None)
     )
     rows = []
-    if source == "digital_client":
+    if source in {"finance_receipt", "finance_decision"}:
+        from ama import finance
+        from ama.models import FinanceReceipt
+
+        if source == "finance_receipt" and draft:
+            o, a = finance.get_obligation(db, draft.target_id)
+            finance.authorize(db, actor, a)
+            rows = [
+                (r.id, r.bank_reference + " · " + str(r.amount_minor) + " коп.")
+                for r in db.scalars(select(FinanceReceipt).where(FinanceReceipt.bot_id == settings().bot_id))
+                if r.data.get("partner_id") == a.partner_id and r.recipient_key == o.data["recipient"]["recipient_key"]
+            ]
+        elif source == "finance_decision" and draft:
+            parent = db.get(Work, draft.target_id)
+            if parent and finance.can_debt(db, actor, parent):
+                rows = [
+                    (w.id, w.title)
+                    for w in db.scalars(
+                        select(Work).where(
+                            Work.parent_id == parent.id, Work.kind == "finance_decision", Work.outcome == "accepted"
+                        )
+                    )
+                ]
+    elif source == "digital_client":
         est = db.get(Entity, draft.data.get("establishment_id")) if draft else None
         if est and access.can_entity(db, actor, est):
             bs = set(
@@ -326,6 +350,14 @@ def refs(db, actor, source, draft=None, search=""):
 def reference_label(db, source, value):
     if not value:
         return "не выбрано"
+    if source == "finance_receipt":
+        from ama.models import FinanceReceipt
+
+        obj = db.get(FinanceReceipt, value)
+        return (obj.bank_reference + " · " + str(obj.amount_minor / 100) + " ₽") if obj else "Поступление не найдено"
+    if source == "finance_decision":
+        obj = db.get(Work, value)
+        return obj.title if obj else "Решение не найдено"
     if source == "digital_client":
         obj = db.get(Binding, value)
         return label(db, obj) if obj else "Чат не найден"

@@ -760,3 +760,115 @@ class DigitalStep(Base):
     due_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
     version: Mapped[int] = mapped_column(Integer, default=1)
     data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class LearningTrack(Base):
+    __tablename__ = 'learning_tracks'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    person_id: Mapped[str] = mapped_column(ForeignKey('people.id'), index=True)
+    course_key: Mapped[str] = mapped_column(String(100))
+    training_id: Mapped[str | None] = mapped_column(ForeignKey('training.id'), nullable=True)
+    binding_id: Mapped[str] = mapped_column(ForeignKey('chat_bindings.id'))
+    origin_key: Mapped[str] = mapped_column(String(180), unique=True)
+    kind: Mapped[str] = mapped_column(String(24), default='general')
+    status: Mapped[str] = mapped_column(String(24), default='pending')
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class LearningEdition(Base):
+    __tablename__ = 'learning_editions'
+    __table_args__ = (UniqueConstraint('record_id','record_version',name='uq_learning_edition'),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    record_id: Mapped[str] = mapped_column(ForeignKey('configuration.id'))
+    record_version: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    data: Mapped[dict] = mapped_column(JSON)
+
+
+class MaterialUse(Base):
+    __tablename__ = 'material_uses'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    person_id: Mapped[str] = mapped_column(ForeignKey('people.id'))
+    binding_id: Mapped[str] = mapped_column(ForeignKey('chat_bindings.id'))
+    record_id: Mapped[str] = mapped_column(ForeignKey('configuration.id'))
+    record_version: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    data: Mapped[dict] = mapped_column(JSON)
+
+
+class FinanceAgreement(Base):
+    __tablename__ = 'finance_agreements'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    work_id: Mapped[str] = mapped_column(ForeignKey('works.id'), unique=True)
+    partner_id: Mapped[str] = mapped_column(ForeignKey('entities.id'))
+    brand_id: Mapped[str | None] = mapped_column(ForeignKey('entities.id'), nullable=True)
+    establishment_id: Mapped[str | None] = mapped_column(ForeignKey('entities.id'), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FinanceObligation(Base):
+    __tablename__ = 'finance_obligations'
+    __table_args__ = (UniqueConstraint('agreement_id','period',name='uq_finance_obligation_period'),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    agreement_id: Mapped[str] = mapped_column(ForeignKey('finance_agreements.id'), index=True)
+    period: Mapped[str] = mapped_column(String(100))
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    due_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    debt_work_id: Mapped[str | None] = mapped_column(ForeignKey('works.id'), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FinanceReceipt(Base):
+    __tablename__ = 'finance_receipts'
+    __table_args__ = (UniqueConstraint('recipient_key','bank_reference',name='uq_finance_bank_receipt'),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    recipient_key: Mapped[str] = mapped_column(String(100))
+    bank_reference: Mapped[str] = mapped_column(String(180))
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    received_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    confirmed_by: Mapped[str] = mapped_column(ForeignKey('people.id'))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FinanceAllocation(Base):
+    __tablename__ = 'finance_allocations'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    receipt_id: Mapped[str] = mapped_column(ForeignKey('finance_receipts.id'), index=True)
+    obligation_id: Mapped[str] = mapped_column(ForeignKey('finance_obligations.id'), index=True)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    source_key: Mapped[str] = mapped_column(String(180), unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTC_DATETIME, default=now)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FinanceSchedule(Base):
+    __tablename__ = 'finance_schedules'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    binding_id: Mapped[str] = mapped_column(ForeignKey('chat_bindings.id'))
+    owner_id: Mapped[str] = mapped_column(ForeignKey('people.id'))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_at: Mapped[datetime] = mapped_column(UTC_DATETIME, index=True)
+    until_at: Mapped[datetime] = mapped_column(UTC_DATETIME)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FinanceBatch(Base):
+    __tablename__ = 'finance_batches'
+    __table_args__ = (UniqueConstraint('bot_id','binding_id','period',name='uq_finance_month_batch'),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    bot_id: Mapped[str] = mapped_column(String(64))
+    binding_id: Mapped[str] = mapped_column(ForeignKey('chat_bindings.id'))
+    period: Mapped[str] = mapped_column(String(7))
+    work_id: Mapped[str | None] = mapped_column(ForeignKey('works.id'), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)

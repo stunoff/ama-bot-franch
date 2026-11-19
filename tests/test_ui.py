@@ -112,7 +112,7 @@ def test_employee_creation_preview_is_atomic_and_confirmation_not_reusable(ctx):
 
 def material_draft(ctx):
     return controller.new_draft(ctx.db, ctx.admin, "record:material", {"key": "welcome", "owner_id": "admin", "value": {
-        "title": "Инструкция", "url": "https://example.org/manual", "audience": ["partner"]}, "reason": "Утверждено"})
+        "title": "Инструкция", "url": "https://example.org/manual", "audience": ["partner"], "content_approval":"Владелец утвердил", "verified_on":"2026-11-18", "link_checks":["opens","audience","exists","title"]}, "reason": "Утверждено"})
 
 
 def test_new_material_preview_save_restart_and_publish(ctx):
@@ -166,7 +166,7 @@ def test_edit_conflict_preserves_second_draft(ctx):
 
 
 def test_nested_course_card_add_reorder_delete_and_full_preview(ctx):
-    d = controller.new_draft(ctx.db, ctx.admin, "record:course", {"key": "new_course", "owner_id": "admin", "reason": "Редакция"})
+    d = controller.new_draft(ctx.db, ctx.admin, "record:course", {"key": "new_course", "owner_id": "admin", "reason": "Редакция","value":{"content_approval":"Владелец утвердил"}})
     open_screen(ctx, ctx.admin, "list_add", draft_id=d.id, path=["value", "cards"])
     for key, value in {"module": 1, "lesson": "1.1", "title": "Полное название", "text": "Полный текст " * 50}.items():
         ui.apply_field(ctx.db, ctx.admin, d, ["value", "cards", 0, key], value)

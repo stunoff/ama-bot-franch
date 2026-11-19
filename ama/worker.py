@@ -114,6 +114,14 @@ def outbox_step(transport):
                     row.status, row.error = "blocked", "Recipient no longer linked to work"
                     return True
         try:
+            from ama.finance import deliverable as finance_deliverable
+            if not finance_deliverable(db,row):
+                row.status,row.error="cancelled","Financial context changed before delivery"
+                return True
+            from ama.learning import deliverable as learning_deliverable
+            if not learning_deliverable(db,row):
+                row.status,row.error="cancelled","Learning context changed"
+                return True
             from ama.packets import deliverable as packet_deliverable
             if not packet_deliverable(db,row):
                 row.status, row.error="cancelled","Packet context changed before delivery"
@@ -234,7 +242,10 @@ def outbox_step(transport):
         if status == "sent" and payload.get("op") == "create_topic":
             from ama.sale_flow import on_topic
             try:
-                if payload.get("digital_group"):
+                if payload.get("finance_topic") or payload.get("finance_batch_topic"):
+                    from ama.finance import on_topic as finance_topic
+                    finance_topic(db,row,external_id)
+                elif payload.get("digital_group"):
                     from ama.digital import on_topic as digital_topic
                     digital_topic(db,row,external_id)
                 elif payload.get("packet_target"):
@@ -252,6 +263,10 @@ def outbox_step(transport):
             delivered(db, row)
             from ama.packets import delivered as packet_delivered
             packet_delivered(db,row)
+            from ama.learning import delivered as learning_delivered
+            learning_delivered(db,row)
+            from ama.finance import delivered as finance_delivered
+            finance_delivered(db,row)
         if status == "sent" and payload.get("probe"):
             b = db.get(Binding, row.binding_id)
             if b and b.version == row.binding_version:
@@ -310,6 +325,18 @@ def project_step():
         return tick(db)
 
 
+def finance_step():
+    from ama.finance import debt_tick,schedule_tick,extra_tick
+    with Session.begin() as db:
+        return debt_tick(db) or schedule_tick(db) or extra_tick(db)
+
+
+def learning_step():
+    from ama.learning import tick
+    with Session.begin() as db:
+        return tick(db)
+
+
 def digital_step():
     from ama.digital import tick
     with Session.begin() as db:
@@ -339,7 +366,7 @@ def main():
     try:
         while True:
             try:
-                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), digital_step(), sla_step(), packet_step(transport), outbox_step(transport)]
+                processed = [inbox_step(), attachment_step(transport), timer_step(), reminder_step(), substitution_step(), sales_step(), project_step(), digital_step(), finance_step(), learning_step(), sla_step(), packet_step(transport), outbox_step(transport)]
                 if not any(processed):
                     time.sleep(settings().worker_interval)
             except SQLAlchemyError as e:

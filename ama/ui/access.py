@@ -8,8 +8,8 @@ from ama.config import settings
 from ama.errors import AccessDenied
 from ama.models import Role, Account, Binding, Entity, EstablishmentBrand, Work, Lead, now
 
-STAFF = {"curator", "support_head", "marketing_manager", "specialist", "contract", "consultant", "chief_marketer"}
-AREAS = {"curator": {"support"}, "support_head": {"support", "management"}, "marketing_manager": {"marketing"},
+STAFF = {"lawyer", "leadership", "curator", "support_head", "marketing_manager", "specialist", "contract", "consultant", "chief_marketer"}
+AREAS = {"lawyer":{"legal"},"leadership":{"leadership"},"curator": {"support"}, "support_head": {"support", "management"}, "marketing_manager": {"marketing"},
          "consultant": {"sales"}, "contract": {"contracts"}, "chief_marketer": {"chief_marketer"}}
 
 

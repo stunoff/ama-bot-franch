@@ -7,7 +7,7 @@ from ama.errors import BusinessError, AccessDenied
 from ama.models import Identity, Account, Entity, EstablishmentBrand, Role, Binding, Record, Audit, Work, Outbox
 from ama.service import versioned, stamp
 
-ROLES = {"admin", "partner", "observer", "curator", "support_head", "marketing_manager", "specialist",
+ROLES = {"lawyer", "leadership", "admin", "partner", "observer", "curator", "support_head", "marketing_manager", "specialist",
          "contract", "consultant", "chief_marketer"}
 KINDS = {"calendar", "material", "course", "route", "commercial", "consent", "template", "policy"}
 
@@ -128,6 +128,10 @@ def _apply(db, actor, command, *, bootstrap=False):
         packet_replace(db,obj,new)
         from ama.digital import replace_binding as digital_replace
         digital_replace(db,obj,new)
+        from ama.learning import replace_binding as learning_replace
+        learning_replace(db,obj,new)
+        from ama.finance import replace_binding as finance_replace
+        finance_replace(db,obj,new)
         from ama.models import ProjectPlan
         for plan in db.scalars(select(ProjectPlan).where(ProjectPlan.client_binding_id == obj.id).with_for_update()):
             plan.client_binding_id = new.id
@@ -142,10 +146,13 @@ def _apply(db, actor, command, *, bootstrap=False):
             event.binding_id, event.binding_version = new.id, new.version
             event.platform, event.chat_id, event.topic_key = new.platform, new.chat_id, new.topic_key
     elif kind == "record":
+        previous_content=None
         if d["kind"] not in KINDS:
             raise BusinessError("Неизвестный справочник.")
         obj = db.scalar(select(Record).where(Record.kind == d["kind"], Record.key == d["key"]).with_for_update())
         if obj:
+            from copy import deepcopy
+            previous_content={"data":deepcopy(obj.data),"version":obj.version,"published":obj.published}
             versioned(obj, d["version"])
             old = obj.version
             if obj.published and not d.get("published", False) and obj.kind in {"material", "course", "route"}:
@@ -181,6 +188,9 @@ def _apply(db, actor, command, *, bootstrap=False):
                 record(db, "calendar", obj.data["calendar"])
         obj.published = d.get("published", False)
         obj.owner_id = d.get("owner_id", obj.owner_id)
+        db.flush()
+        from ama.learning import on_record
+        on_record(db,actor,obj,previous_content)
     elif kind == "entity_update":
         obj = db.scalar(select(Entity).where(Entity.id == d["id"]).with_for_update())
         if not obj:

@@ -114,8 +114,14 @@ def main():
             delivered(db, obj)
             from ama.packets import delivered as packet_delivered
             packet_delivered(db,obj)
+            from ama.learning import delivered as learning_delivered
+            learning_delivered(db,obj)
+            from ama.finance import delivered as finance_delivered
+            finance_delivered(db,obj)
             if obj.payload.get("op")=="create_topic":
-                if obj.payload.get("digital_group"):
+                if obj.payload.get("finance_topic") or obj.payload.get("finance_batch_topic"):
+                    from ama.finance import on_topic
+                elif obj.payload.get("digital_group"):
                     from ama.digital import on_topic
                 elif obj.payload.get("packet_target"):
                     from ama.packets import on_topic

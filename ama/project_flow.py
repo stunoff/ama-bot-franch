@@ -21,7 +21,6 @@ from ama.models import (
     Work,
     Binding,
     Record,
-    Training,
     Timer,
     now,
 )
@@ -664,23 +663,9 @@ def before_transition(db, actor, w, action, data):
             ):
                 raise BusinessError("Есть открытые блокирующие замечания.")
         if b.code == "fp_training":
-            course = db.scalar(
-                select(Record).where(Record.kind == "course", Record.key == "general", Record.published.is_(True))
-            )
-            training = (
-                db.scalar(
-                    select(Training).where(
-                        Training.person_id == p.partner_person_id,
-                        Training.course_key == "general",
-                        Training.course_version == course.version,
-                        Training.completed_at.is_not(None),
-                    )
-                )
-                if course and p.partner_person_id
-                else None
-            )
-            if not training:
-                raise BusinessError("Назначенный ФП не завершил опубликованный курс лично.")
+            from ama.learning import completed
+            if not completed(db,p.partner_person_id):
+                raise BusinessError("Назначенный ФП не завершил обязательное ознакомление и обновления лично.")
         if b.code == "start_smm":
             end = w.data.get("smm_until")
             if not end or parse_date(end) > now() or not w.data.get("smm_report"):

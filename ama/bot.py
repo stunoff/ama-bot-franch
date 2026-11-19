@@ -7,7 +7,7 @@ from ama.auth import identify, require, roles_for
 from ama.errors import BusinessError, AccessDenied, RetryLater
 from ama.models import (Binding, Work, Outbox, Record, Entity, Account, Identity, Lead, Attachment,
                         EstablishmentBrand)
-from ama.service import queue, create_work, transition, attach, training_action, STATUSES
+from ama.service import queue, create_work, transition, attach, STATUSES
 from ama import admin, sales, projects, broadcasts, operations, wizard, reminders
 
 MENU = [["Предприятия", "af:enterprises"], ["Мои задачи", "af:tasks"], ["Ознакомление", "af:training"],
@@ -214,6 +214,9 @@ def handle(db, platform, raw):
             text = "/" + p[1]
     command, _, arg = text.partition(" ")
     command = command.split("@")[0].lower()
+    if command == "/finance" and not arg:
+        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"fi_home"))
+        return
     if command == "/broadcast" and not arg:
         ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),"pk_list"))
         return
@@ -295,27 +298,11 @@ def handle(db, platform, raw):
         w = transition(db, actor, d["id"], d["version"], d["action"], d.get("data", {}), event.key)
         text, buttons = card(db, actor, w)
         send(db, event, text, buttons)
-    elif command == "/training":
-        d = json_arg(arg) if arg else {}
-        t = training_action(db, actor, d.get("course", "general"), d.get("action", "open"), d.get("version"))
-        c = t.cards[t.position]
-        buttons = [["Назад", f"af:t:back:{t.version}:{'c' if t.course_key == 'call_center' else 'g'}"], ["Понятно, дальше", f"af:t:next:{t.version}:{'c' if t.course_key == 'call_center' else 'g'}"],
-                   ["Продолжить позже", f"af:t:later:{t.version}:{'c' if t.course_key == 'call_center' else 'g'}"], ["Материалы", "af:knowledge"]]
-        send(db, event, ("Ознакомление завершено.\n" if t.completed_at else "") +
-             f"Карточка {t.position + 1}/{len(t.cards)}\n{c['title']}\n{c['text']}" +
-             ("\nМесто сохранено. Вернитесь через /training." if t.paused else ""), buttons)
-    elif command == "/knowledge":
-        granted = roles_for(db, actor)
-        rows = []
-        for r in db.scalars(select(Record).where(Record.kind == "material", Record.published.is_(True))):
-            d = r.data
-            if not granted.intersection(d.get("audience", [])):
-                continue
-            if d.get("brand_id") and d["brand_id"] != binding.brand_id:
-                continue
-            if d.get("url"):
-                rows.append(d.get("title", r.key) + "\n" + d["url"])
-        send(db, event, "База знаний:\n" + ("\n\n".join(rows) or "Материалы ещё не опубликованы."))
+    elif command in {"/training","/learning","/knowledge"}:
+        d=json_arg(arg) if arg and command=="/training" else {}
+        action="lr_materials" if command=="/knowledge" else "lr_course" if command=="/training" else "lr_home"
+        params={"course":d.get("course","general"),"op":d.get("action","open"),"expected":d.get("version")} if command=="/training" else {}
+        ui.reply(db,actor,event,ui.dispatch(db,actor,ui.session(db,actor),action,params))
     elif command == "/files":
         w = db.get(Work, arg.strip())
         if not w:

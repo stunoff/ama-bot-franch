@@ -520,6 +520,15 @@ def dispatch(db, actor, s, action, p):
     if action == "confirm":
         d = view_draft(db, actor, p["draft_id"])
         result = business.confirm(db, actor, d, p["expected"], publish=p.get("publish", False))
+        if d.kind in {"config:probe_binding", "config:activate_binding"}:
+            message = (
+                "Тест поставлен в очередь доставки. Чат ещё не подключён. "
+                "Дождитесь сообщения в нужной группе, обновите статус и нажмите «Подключить чат…»."
+                if d.kind == "config:probe_binding" else "Чат подключён. Доступ сотрудников определяется их назначениями и областью."
+            )
+            return show(db, actor, s, message,
+                        [B("Обновить статус чата", "object", catalog="bindings", object_id=result["id"]), B("Настройки", "settings")],
+                        "object", catalog="bindings", object_id=result["id"])
         if d.kind=="ops:mark_test":
             return show(db,actor,s,"Запись отмечена тестовой. Связанные тестовые данные исключаются из бизнес-аналитики.",[B("Эксплуатация","ops_home")],"ops_home")
         if d.kind.startswith("ops:"):

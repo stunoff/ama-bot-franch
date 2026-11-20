@@ -141,6 +141,11 @@ def outbox_step(transport):
         if not row:
             return False
         b = db.get(Binding, row.binding_id) if row.binding_id else None
+        if row.payload.get("probe"):
+            from ama.delivery_checks import current_probe
+            if not current_probe(b, row):
+                row.status, row.error = "cancelled", "Stale route probe; create a new delivery test"
+                return True
         if row.binding_id and not row.payload.get("probe"):
             if not b or not b.active or not b.verified or row.binding_version != b.version:
                 row.status, row.error = "blocked", "Route changed; verify/migrate recipient"
@@ -395,10 +400,8 @@ def outbox_step(transport):
         from ama.publications import refresh as publication_refresh
 
         publication_refresh(db, row)
-        if status == "sent" and payload.get("probe"):
-            b = db.get(Binding, row.binding_id)
-            if b and b.version == row.binding_version:
-                b.verified = True
+        from ama.delivery_checks import confirm_probe
+        confirm_probe(db, row)
         db.add(Audit(object_id=row.id, action="DELIVERY_" + row.status.upper(), data={"external_id": external_id}))
     return True
 

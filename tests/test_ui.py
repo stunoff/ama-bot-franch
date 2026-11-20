@@ -429,7 +429,9 @@ def test_binding_probe_activate_and_safe_replace_through_forms(ctx, monkeypatch)
     fill(ctx, ctx.admin, d, ["reason"], "Проверка нового чата")
     response = open_screen(ctx, ctx.admin, "preview", draft_id=d.id)
     assert pending(ctx) == 0
-    click(ctx, ctx.admin, response, "Подтвердить применение")
+    queued = click(ctx, ctx.admin, response, "Подтвердить применение")
+    assert "Чат ещё не подключён" in queued[0]
+    assert "Обновить статус чата" in [label for label, _ in queued[1]]
     assert not b.verified and not b.active
     ctx.db.commit()
     class Transport:

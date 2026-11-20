@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ama-franchising"
-version = "0.11.0"
+version = "0.11.1"
 description = "АМА Франчайзинг — Telegram/MAX, единое состояние MySQL"
 requires-python = ">=3.12"
 dependencies = ["fastapi==0.115.12", "uvicorn==0.34.2", "SQLAlchemy==2.0.40", "PyMySQL[rsa]==1.1.1", "alembic==1.15.2", "httpx==0.28.1", "pydantic-settings==2.9.1"]

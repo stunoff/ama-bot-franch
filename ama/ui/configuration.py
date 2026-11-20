@@ -198,6 +198,9 @@ def validate_record(db, kind, value, *, published=False):
             parsed = urlsplit(link.get("url", ""))
             if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
                 raise BusinessError("Материал требует безопасную HTTPS-ссылку.")
+    if kind == "route" and published:
+        from ama.route_checks import validate_route
+        validate_route(db, value)
     if kind == "calendar":
         from ama.calendar import Calendar
 
@@ -442,10 +445,8 @@ def extra(db, actor, kind, d):
                 else:
                     from ama.sale_flow import on_topic
                 on_topic(db, obj, d["external_id"])
-            if obj.payload.get("probe"):
-                b = db.get(Binding, obj.binding_id)
-                if b and b.version == obj.binding_version:
-                    b.verified = True
+            from ama.delivery_checks import confirm_probe
+            confirm_probe(db, obj)
         else:
             obj.status, obj.error, obj.attempts, obj.retry_at = "pending", None, 0, now()
         db.add(

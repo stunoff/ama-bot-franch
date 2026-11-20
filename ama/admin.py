@@ -145,10 +145,9 @@ def _apply(db, actor, command, *, bootstrap=False):
         versioned(obj, d["version"])
         old = obj.version
         if obj.purpose == "client":
-            if not db.scalar(
-                select(Role).where(Role.name == "partner", Role.partner_id == obj.partner_id, Role.active.is_(True))
-            ):
-                raise BusinessError("Не назначен ФП.")
+            from ama.route_checks import partner_available
+            if not partner_available(db, obj):
+                raise BusinessError("Не назначен действующий ФП с активным аккаунтом нужного мессенджера.")
             obj.active_client_key = f"{settings().bot_id}:{obj.partner_id}:{obj.brand_id}"
         obj.active, obj.version = True, obj.version + 1
     elif kind == "replace_binding":
@@ -164,7 +163,23 @@ def _apply(db, actor, command, *, bootstrap=False):
         db.flush()
         new.active, new.version = True, new.version + 1
         if new.purpose == "client":
+            from ama.route_checks import partner_available
+            if not partner_available(db, new):
+                raise BusinessError("Не назначен действующий ФП нового маршрута.")
             new.active_client_key = f"{settings().bot_id}:{new.partner_id}:{new.brand_id}"
+        # Future requests resolve configuration records, not the existing Work rows.
+        from ama.ui.configuration import revision, snapshot
+        from ama.route_checks import validate_route
+        for route_record in db.scalars(select(Record).where(Record.kind == "route").with_for_update()):
+            if route_record.data.get("binding_id") != obj.id:
+                continue
+            before = snapshot(route_record)
+            route_record.data = {**route_record.data, "binding_id": new.id}
+            if route_record.published:
+                validate_route(db, route_record.data, route_record.key)
+            route_record.version += 1
+            db.flush()
+            revision(db, actor, "record", route_record, before, d.get("reason") or "Проверенная замена рабочего чата")
         for w in db.scalars(
             select(Work)
             .where(
@@ -218,6 +233,9 @@ def _apply(db, actor, command, *, bootstrap=False):
         for event in db.scalars(
             select(Outbox).where(Outbox.binding_id == obj.id, Outbox.status.in_(["pending", "failed"]))
         ):
+            if event.payload.get("probe"):
+                event.status, event.error = "cancelled", "Route replaced; old probe is obsolete"
+                continue
             event.binding_id, event.binding_version = new.id, new.version
             event.platform, event.chat_id, event.topic_key = new.platform, new.chat_id, new.topic_key
     elif kind == "record":
@@ -254,21 +272,8 @@ def _apply(db, actor, command, *, bootstrap=False):
             if obj.kind == "course" and not obj.data.get("cards"):
                 raise BusinessError("Нет карточек ознакомления.")
             if obj.kind == "route":
-                from ama.auth import active_person_role
-                from types import SimpleNamespace
-
-                scope = SimpleNamespace(
-                    partner_id=obj.data.get("partner_id"), brand_id=obj.data.get("brand_id"), establishment_id=None
-                )
-                b = db.get(Binding, obj.data.get("binding_id"))
-                if not b or not b.active or not b.verified or not obj.data.get("calendar"):
-                    raise BusinessError("Маршрут требует проверенный чат и календарь.")
-                for k in ("owner_id", "reviewer_id"):
-                    if not active_person_role(db, obj.data.get(k), ROLES - {"admin", "observer"}, scope):
-                        raise BusinessError("Не назначен исполнитель/принимающий маршрута.")
-                from ama.service import record
-
-                record(db, "calendar", obj.data["calendar"])
+                from ama.route_checks import validate_route
+                validate_route(db, obj.data, obj.key)
         obj.published = d.get("published", False)
         obj.owner_id = d.get("owner_id", obj.owner_id)
         db.flush()

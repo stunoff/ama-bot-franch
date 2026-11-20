@@ -24,7 +24,7 @@ from ama.auth import active_person_role
 from ama.errors import BusinessError
 from ama.ui.configuration import validate_record
 
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 
 
 def cases():
@@ -94,6 +94,9 @@ def report(db):
     for r in db.scalars(select(Record).where(Record.published.is_(True))):
         try:
             validate_record(db, r.kind, r.data, published=True)
+            if r.kind == 'route':
+                from ama.route_checks import validate_route
+                validate_route(db, r.data, r.key)
         except BusinessError:
             add("published_configuration_invalid", r.id)
         if not r.owner_id:

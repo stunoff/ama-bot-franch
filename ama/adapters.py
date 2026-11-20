@@ -114,6 +114,8 @@ class DeliveryUncertain(Exception):
 
 class Transport:
     def __init__(self):
+        from ama.logging_security import configure
+        configure()
         self.cfg = settings()
         self.client = httpx.Client(timeout=httpx.Timeout(25, connect=10), follow_redirects=False)
 
@@ -210,7 +212,8 @@ class Transport:
         if response.status_code == 429:
             raise BusinessError("Лимит мессенджера; сообщение будет повторено с задержкой.")
         if response.status_code >= 400:
-            raise BusinessError(f"Мессенджер отклонил запрос, HTTP {response.status_code}.")
+            from ama.logging_security import response_error
+            raise BusinessError("Мессенджер отклонил запрос, " + response_error(response))
 
     def create_topic(self, platform, chat_id, name):
         if platform != "telegram":
